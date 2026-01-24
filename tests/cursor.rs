@@ -161,7 +161,7 @@ fn test_iter_empty_database() {
 
     assert!(cursor.iter::<(), ()>().next().is_none());
     assert!(cursor.iter_start::<(), ()>().next().is_none());
-    assert!(cursor.iter_from::<(), ()>(b"foo").next().is_none());
+    assert!(dbg!(cursor.iter_from::<(), ()>(b"foo").next()).is_none());
 }
 
 #[test]

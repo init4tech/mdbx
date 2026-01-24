@@ -456,9 +456,10 @@ impl Transaction<RW> {
         dbi: ffi::MDBX_dbi,
         key: impl AsRef<[u8]>,
         len: usize,
+        flags: WriteFlags,
         f: impl FnOnce(&mut [u8]),
     ) -> MdbxResult<()> {
-        let buf = unsafe { self.reserve(dbi, key, len, WriteFlags::empty())? };
+        let buf = unsafe { self.reserve(dbi, key, len, flags)? };
         f(buf);
         Ok(())
     }

@@ -1,6 +1,6 @@
 use crate::{
     Database, Mode, RO, RW, SyncMode, Transaction, TransactionKind,
-    error::{Error, Result, mdbx_result},
+    error::{MdbxError, MdbxResult, ReadResult, mdbx_result},
     flags::EnvironmentFlags,
     sys::txn_manager::{TxnManager, TxnManagerMessage, TxnPtr},
 };
@@ -70,13 +70,13 @@ impl Environment {
 
     /// Returns true if the environment was opened in [`crate::Mode::ReadWrite`] mode.
     #[inline]
-    pub fn is_read_write(&self) -> Result<bool> {
+    pub fn is_read_write(&self) -> MdbxResult<bool> {
         Ok(!self.is_read_only()?)
     }
 
     /// Returns true if the environment was opened in [`crate::Mode::ReadOnly`] mode.
     #[inline]
-    pub fn is_read_only(&self) -> Result<bool> {
+    pub fn is_read_only(&self) -> MdbxResult<bool> {
         Ok(matches!(self.info()?.mode(), Mode::ReadOnly))
     }
 
@@ -94,13 +94,13 @@ impl Environment {
 
     /// Create a read-only transaction for use with the environment.
     #[inline]
-    pub fn begin_ro_txn(&self) -> Result<Transaction<RO>> {
+    pub fn begin_ro_txn(&self) -> MdbxResult<Transaction<RO>> {
         Transaction::new(self.clone())
     }
 
     /// Create a read-write transaction for use with the environment. This method will block while
     /// there are any other read-write transactions open on the environment.
-    pub fn begin_rw_txn(&self) -> Result<Transaction<RW>> {
+    pub fn begin_rw_txn(&self) -> MdbxResult<Transaction<RW>> {
         let mut warned = false;
         let txn = loop {
             let (tx, rx) = sync_channel(0);
@@ -110,7 +110,7 @@ impl Environment {
                 sender: tx,
             });
             let res = rx.recv().unwrap();
-            if matches!(&res, Err(Error::Busy)) {
+            if matches!(&res, Err(MdbxError::Busy)) {
                 if !warned {
                     warned = true;
                     warn!(target: "libmdbx", "Process stalled, awaiting read-write transaction lock.");
@@ -148,12 +148,12 @@ impl Environment {
     }
 
     /// Flush the environment data buffers to disk.
-    pub fn sync(&self, force: bool) -> Result<bool> {
+    pub fn sync(&self, force: bool) -> MdbxResult<bool> {
         mdbx_result(unsafe { ffi::mdbx_env_sync_ex(self.env_ptr(), force, false) })
     }
 
     /// Retrieves statistics about this environment.
-    pub fn stat(&self) -> Result<Stat> {
+    pub fn stat(&self) -> MdbxResult<Stat> {
         unsafe {
             let mut stat = Stat::new();
             mdbx_result(ffi::mdbx_env_stat_ex(
@@ -167,7 +167,7 @@ impl Environment {
     }
 
     /// Retrieves info about this environment.
-    pub fn info(&self) -> Result<Info> {
+    pub fn info(&self) -> MdbxResult<Info> {
         unsafe {
             let mut info = Info(mem::zeroed());
             mdbx_result(ffi::mdbx_env_info_ex(
@@ -200,21 +200,21 @@ impl Environment {
     ///
     /// Note:
     ///
-    /// * MDBX stores all the freelists in the designated database 0 in each environment, and the
-    ///   freelist count is stored at the beginning of the value as `uint32_t` in the native byte
-    ///   order.
+    /// * MDBX stores all the freelists in the designated database 0 in each
+    ///   environment, and the freelist count is stored at the beginning of the
+    ///   value as `uint32_t` in the native byte order.
     ///
     /// * It will create a read transaction to traverse the freelist database.
-    pub fn freelist(&self) -> Result<usize> {
+    pub fn freelist(&self) -> ReadResult<usize> {
         let mut freelist: usize = 0;
         let txn = self.begin_ro_txn()?;
         let db = Database::freelist_db();
-        let cursor = txn.cursor(db.dbi())?;
+        let mut cursor = txn.cursor(db.dbi())?;
+        let mut iter = cursor.iter_slices();
 
-        for result in cursor.iter_slices() {
-            let (_key, value) = result?;
+        while let Some((_key, value)) = iter.borrow_next()? {
             if value.len() < size_of::<u32>() {
-                return Err(Error::Corrupted);
+                return Err(MdbxError::Corrupted.into());
             }
             let s = &value[..size_of::<u32>()];
             freelist += NativeEndian::read_u32(s) as usize;
@@ -606,7 +606,7 @@ impl EnvironmentBuilder {
     /// Open an environment.
     ///
     /// Database files will be opened with 644 permissions.
-    pub fn open(&self, path: &Path) -> Result<Environment> {
+    pub fn open(&self, path: &Path) -> MdbxResult<Environment> {
         self.open_with_permissions(path, 0o644)
     }
 
@@ -617,7 +617,7 @@ impl EnvironmentBuilder {
         &self,
         path: &Path,
         mode: ffi::mdbx_mode_t,
-    ) -> Result<Environment> {
+    ) -> MdbxResult<Environment> {
         let mut env: *mut ffi::MDBX_env = ptr::null_mut();
         unsafe {
             if let Some(log_level) = self.log_level {
@@ -703,7 +703,7 @@ impl EnvironmentBuilder {
 
                 let path = match CString::new(path_to_bytes(path)) {
                     Ok(path) => path,
-                    Err(_) => return Err(Error::Invalid),
+                    Err(_) => return Err(MdbxError::Invalid),
                 };
                 mdbx_result(ffi::mdbx_env_open(
                     env,
@@ -917,7 +917,9 @@ fn convert_hsr_fn(callback: Option<HandleSlowReadersCallback>) -> ffi::MDBX_hsr_
 
 #[cfg(test)]
 mod tests {
-    use crate::{Environment, Error, Geometry, HandleSlowReadersReturnCode, PageSize, WriteFlags};
+    use crate::{
+        Environment, Geometry, HandleSlowReadersReturnCode, MdbxError, PageSize, WriteFlags,
+    };
     use std::{
         ops::RangeInclusive,
         sync::atomic::{AtomicBool, Ordering},
@@ -983,7 +985,7 @@ mod tests {
             for i in 1_000usize..1_000_000 {
                 match tx.put(db.dbi(), i.to_le_bytes(), b"0", WriteFlags::empty()) {
                     Ok(_) => {}
-                    Err(Error::MapFull) => break,
+                    Err(MdbxError::MapFull) => break,
                     result @ Err(_) => result.unwrap(),
                 }
             }

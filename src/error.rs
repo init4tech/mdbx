@@ -1,11 +1,48 @@
-use std::{ffi::c_int, result};
+use std::{convert::Infallible, ffi::c_int, result};
 
 /// An MDBX result.
-pub type Result<T> = result::Result<T, Error>;
+pub type MdbxResult<T, E = MdbxError> = result::Result<T, E>;
+
+/// Result type for codec operations.
+pub type ReadResult<T, E = ReadError> = Result<T, E>;
+
+/// Error type for reading from the database.
+///
+/// This encapsulates errors that can occur during DB operations via
+/// `Self::Mdbx` as well as post-read during the [`TableObject`] decoding
+/// step via `Self::Decoding`.
+///
+/// For simplicity, the decoding error is boxed. [`Self::decoding`] can be used
+/// to create such an error from any error type fits the bounds. E.g.
+/// `result.map_err(ReadError::decoding)`.
+///
+/// [`TableObject`]: crate::codec::TableObject
+#[derive(thiserror::Error, Debug)]
+pub enum ReadError {
+    /// Mdbx error during decoding.
+    #[error(transparent)]
+    Mdbx(#[from] MdbxError),
+    /// Type-associated error while decoding.
+    #[error(transparent)]
+    Decoding(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
+}
+
+impl ReadError {
+    /// Creates a new decoding error from a boxed error.
+    pub fn decoding<E>(err: E) -> Self
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        Self::Decoding(Box::new(err))
+    }
+}
 
 /// An MDBX error kind.
+///
+/// This represents various error conditions that can occur when interacting
+/// with the MDBX database.
 #[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq)]
-pub enum Error {
+pub enum MdbxError {
     /// Key/data pair already exists.
     #[error("key/data pair already exists")]
     KeyExist,
@@ -137,7 +174,7 @@ pub enum Error {
     Other(i32),
 }
 
-impl Error {
+impl MdbxError {
     /// Converts a raw error code to an [Error].
     pub const fn from_err_code(err_code: c_int) -> Self {
         match err_code {
@@ -217,8 +254,8 @@ impl Error {
     }
 }
 
-impl From<Error> for i32 {
-    fn from(value: Error) -> Self {
+impl From<MdbxError> for i32 {
+    fn from(value: MdbxError) -> Self {
         value.to_err_code()
     }
 }
@@ -232,11 +269,34 @@ impl From<Error> for i32 {
 /// The most unintuitive case is `mdbx_txn_commit` which returns `Ok(true)`
 /// when the commit has been aborted.
 #[inline]
-pub(crate) const fn mdbx_result(err_code: c_int) -> Result<bool> {
+pub(crate) const fn mdbx_result(err_code: c_int) -> MdbxResult<bool> {
     match err_code {
         ffi::MDBX_SUCCESS => Ok(false),
         ffi::MDBX_RESULT_TRUE => Ok(true),
-        other => Err(Error::from_err_code(other)),
+        other => Err(MdbxError::from_err_code(other)),
+    }
+}
+
+impl From<MdbxError> for Infallible {
+    fn from(_value: MdbxError) -> Self {
+        unreachable!()
+    }
+}
+
+/// Parses an MDBX error code into a result type.
+///
+/// This function returns `Ok(())` on both `MDBX_SUCCESS` and
+/// `MDBX_RESULT_TRUE`, effectively treating them both as non-error outcomes.
+/// This is useful in scenarios where the distinction between these two
+/// success codes is not relevant to the caller, e.g. on a `get` operation
+/// where either outcome indicates a successful operation.
+#[inline]
+#[allow(dead_code)]
+pub(crate) const fn mdbx_result_unit(err_code: c_int) -> MdbxResult<()> {
+    match err_code {
+        ffi::MDBX_SUCCESS => Ok(()),
+        ffi::MDBX_RESULT_TRUE => Ok(()),
+        other => Err(MdbxError::from_err_code(other)),
     }
 }
 
@@ -244,7 +304,22 @@ pub(crate) const fn mdbx_result(err_code: c_int) -> Result<bool> {
 macro_rules! mdbx_try_optional {
     ($expr:expr) => {{
         match $expr {
-            Err(Error::NotFound | Error::NoData) => return Ok(None),
+            Err(MdbxError::NotFound | MdbxError::NoData) => return Ok(None),
+            Err(e) => return Err(e),
+            Ok(v) => v,
+        }
+    }};
+}
+
+#[macro_export]
+macro_rules! codec_try_optional {
+    ($expr:expr) => {{
+        match $expr {
+            Err($crate::error::ReadError::Mdbx(
+                $crate::MdbxError::NotFound | $crate::MdbxError::NoData,
+            )) => {
+                return Ok(None);
+            }
             Err(e) => return Err(e),
             Ok(v) => v,
         }
@@ -259,14 +334,14 @@ mod tests {
     fn test_description() {
         assert_eq!(
             "the environment opened in read-only, check <https://reth.rs/run/troubleshooting.html> for more",
-            Error::from_err_code(13).to_string()
+            MdbxError::from_err_code(13).to_string()
         );
 
-        assert_eq!("file is not an MDBX file", Error::Invalid.to_string());
+        assert_eq!("file is not an MDBX file", MdbxError::Invalid.to_string());
     }
 
     #[test]
     fn test_conversion() {
-        assert_eq!(Error::from_err_code(ffi::MDBX_KEYEXIST), Error::KeyExist);
+        assert_eq!(MdbxError::from_err_code(ffi::MDBX_KEYEXIST), MdbxError::KeyExist);
     }
 }

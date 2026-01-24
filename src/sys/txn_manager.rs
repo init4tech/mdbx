@@ -1,6 +1,6 @@
 use crate::{
     CommitLatency,
-    error::{Result, mdbx_result},
+    error::{MdbxResult, mdbx_result},
     sys::EnvPtr,
 };
 use std::{
@@ -14,9 +14,9 @@ unsafe impl Send for TxnPtr {}
 unsafe impl Sync for TxnPtr {}
 
 pub(crate) enum TxnManagerMessage {
-    Begin { parent: TxnPtr, flags: ffi::MDBX_txn_flags_t, sender: SyncSender<Result<TxnPtr>> },
-    Abort { tx: TxnPtr, sender: SyncSender<Result<bool>> },
-    Commit { tx: TxnPtr, sender: SyncSender<Result<(bool, CommitLatency)>> },
+    Begin { parent: TxnPtr, flags: ffi::MDBX_txn_flags_t, sender: SyncSender<MdbxResult<TxnPtr>> },
+    Abort { tx: TxnPtr, sender: SyncSender<MdbxResult<bool>> },
+    Commit { tx: TxnPtr, sender: SyncSender<MdbxResult<(bool, CommitLatency)>> },
 }
 
 /// Manages transactions by doing two things:
@@ -173,14 +173,15 @@ mod read_transactions {
         max_duration: Duration,
         /// List of currently active read transactions.
         ///
-        /// We store `usize` instead of a raw pointer as a key, because pointers are not
-        /// comparable. The time of transaction opening is stored as a value.
+        /// We store `usize` instead of a raw pointer as a key, because
+        /// pointers are not comparable. The time of transaction opening is
+        /// stored as a value.
         ///
-        /// The backtrace of the transaction opening is recorded only when debug assertions are
-        /// enabled.
+        /// The backtrace of the transaction opening is recorded only when
+        /// debug assertions are enabled.
         active: DashMap<usize, (TransactionPtr, Instant, Option<Arc<Backtrace>>)>,
-        /// List of timed out transactions that were not aborted by the user yet, hence have a
-        /// dangling read transaction pointer.
+        /// List of timed out transactions that were not aborted by the user
+        /// yet, hence have a dangling read transaction pointer.
         timed_out_not_aborted: DashSet<usize>,
     }
 
@@ -324,7 +325,7 @@ mod read_transactions {
     #[cfg(test)]
     mod tests {
         use crate::{
-            Environment, Error, MaxReadTransactionDuration,
+            Environment, MaxReadTransactionDuration, MdbxError,
             sys::txn_manager::read_transactions::READ_TRANSACTIONS_CHECK_INTERVAL,
         };
         use std::{thread::sleep, time::Duration};
@@ -382,11 +383,11 @@ mod read_transactions {
                 assert!(read_transactions.timed_out_not_aborted.contains(&tx_ptr));
 
                 // Use the timed out transaction and observe the `Error::ReadTransactionTimeout`
-                assert_eq!(tx.open_db(None).err(), Some(Error::ReadTransactionTimeout));
+                assert_eq!(tx.open_db(None).err(), Some(MdbxError::ReadTransactionTimeout));
                 assert!(!read_transactions.active.contains_key(&tx_ptr));
                 assert!(read_transactions.timed_out_not_aborted.contains(&tx_ptr));
 
-                assert_eq!(tx.id().err(), Some(Error::ReadTransactionTimeout));
+                assert_eq!(tx.id().err(), Some(MdbxError::ReadTransactionTimeout));
                 assert!(!read_transactions.active.contains_key(&tx_ptr));
                 assert!(read_transactions.timed_out_not_aborted.contains(&tx_ptr));
 

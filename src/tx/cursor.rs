@@ -370,7 +370,7 @@ where
     {
         let res: Result<Option<((), ())>> = self.set_range(key);
         if let Err(error) = res {
-            return Iter::Err(Some(error));
+            return Iter::Err(Some(dbg!(error)));
         };
         Iter::new(self, ffi::MDBX_GET_CURRENT, ffi::MDBX_NEXT)
     }

@@ -240,6 +240,16 @@ pub(crate) const fn mdbx_result(err_code: c_int) -> Result<bool> {
     }
 }
 
+#[inline]
+#[allow(dead_code)]
+pub(crate) const fn mdbx_result_unit(err_code: c_int) -> Result<()> {
+    match err_code {
+        ffi::MDBX_SUCCESS => Ok(()),
+        ffi::MDBX_RESULT_TRUE => Ok(()),
+        other => Err(Error::from_err_code(other)),
+    }
+}
+
 #[macro_export]
 macro_rules! mdbx_try_optional {
     ($expr:expr) => {{

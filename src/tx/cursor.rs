@@ -84,31 +84,27 @@ where
         Key: TableObject<'a>,
         Value: TableObject<'a>,
     {
-        unsafe {
-            let mut key_val = slice_to_val(key);
-            let mut data_val = slice_to_val(data);
-            let key_ptr = key_val.iov_base;
-            let data_ptr = data_val.iov_base;
-            self.txn.txn_execute(|_txn| {
-                let v = mdbx_result(ffi::mdbx_cursor_get(
-                    self.cursor,
-                    &mut key_val,
-                    &mut data_val,
-                    op,
-                ))?;
-                assert_ne!(data_ptr, data_val.iov_base);
-                let key_out = {
-                    // MDBX wrote in new key
-                    if ptr::eq(key_ptr, key_val.iov_base) {
-                        None
-                    } else {
-                        Some(Key::decode_val::<K>(self.txn, key_val)?)
-                    }
-                };
-                let data_out = Value::decode_val::<K>(self.txn, data_val)?;
-                Ok((key_out, data_out, v))
-            })?
-        }
+        let mut key_val = slice_to_val(key);
+        let mut data_val = slice_to_val(data);
+        let key_ptr = key_val.iov_base;
+        let data_ptr = data_val.iov_base;
+
+        self.txn.txn_execute(|_txn| {
+            let v = mdbx_result(unsafe {
+                ffi::mdbx_cursor_get(self.cursor, &mut key_val, &mut data_val, op)
+            })?;
+            assert_ne!(data_ptr, data_val.iov_base);
+            let key_out = {
+                // MDBX wrote in new key
+                if ptr::eq(key_ptr, key_val.iov_base) {
+                    None
+                } else {
+                    Some(Key::decode_val::<K>(self.txn, key_val)?)
+                }
+            };
+            let data_out = Value::decode_val::<K>(self.txn, data_val)?;
+            Ok((key_out, data_out, v))
+        })?
     }
 
     fn get_value<Value>(
@@ -368,11 +364,12 @@ where
         Key: TableObject<'a>,
         Value: TableObject<'a>,
     {
-        let res: Result<Option<((), ())>> = self.set_range(key);
-        if let Err(error) = res {
-            return Iter::Err(Some(dbg!(error)));
-        };
-        Iter::new(self, ffi::MDBX_GET_CURRENT, ffi::MDBX_NEXT)
+        match self.set_range::<(), ()>(key) {
+            Err(error) => Iter::Err(Some(error)),
+            // No match found, start iteration from next position (will yield nothing on empty DB)
+            Ok(None) => Iter::new(self, ffi::MDBX_NEXT, ffi::MDBX_NEXT),
+            Ok(Some(_)) => Iter::new(self, ffi::MDBX_GET_CURRENT, ffi::MDBX_NEXT),
+        }
     }
 
     /// Iterate over duplicate database items. The iterator will begin with the
@@ -403,11 +400,12 @@ where
         Key: TableObject<'a>,
         Value: TableObject<'a>,
     {
-        let res: Result<Option<((), ())>> = self.set_range(key);
-        if let Err(error) = res {
-            return IterDup::Err(Some(error));
-        };
-        IterDup::new(self, ffi::MDBX_GET_CURRENT)
+        match self.set_range::<(), ()>(key) {
+            Err(error) => IterDup::Err(Some(error)),
+            // No match found, start iteration from next position (will yield nothing on empty DB)
+            Ok(None) => IterDup::new(self, ffi::MDBX_NEXT),
+            Ok(Some(_)) => IterDup::new(self, ffi::MDBX_GET_CURRENT),
+        }
     }
 
     /// Iterate over the duplicates of the item in the database with the given key.
@@ -492,7 +490,7 @@ where
     }
 }
 
-const unsafe fn slice_to_val(slice: Option<&[u8]>) -> ffi::MDBX_val {
+const fn slice_to_val(slice: Option<&[u8]>) -> ffi::MDBX_val {
     match slice {
         Some(slice) => {
             ffi::MDBX_val { iov_len: slice.len(), iov_base: slice.as_ptr() as *mut c_void }
@@ -580,7 +578,8 @@ where
                             // MDBX_ENODATA can occur when the cursor was previously sought to a
                             // non-existent value, e.g. iter_from with a
                             // key greater than all values in the database.
-                            ffi::MDBX_NOTFOUND | ffi::MDBX_ENODATA => None,
+                            // MDBX_RESULT_TRUE can occur when reading from an unpositioned cursor.
+                            ffi::MDBX_NOTFOUND | ffi::MDBX_ENODATA | ffi::MDBX_RESULT_TRUE => None,
                             error => Some(Err(Error::from_err_code(error))),
                         }
                     });
@@ -609,6 +608,10 @@ where
     /// an error makes `Cursor.iter()`* methods infallible, so consumers only
     /// need to check the result of `Iter.next()`.
     Err(Option<Error>),
+
+    /// An iterator that returns `None` on every call to [`Iter::next()`]. This
+    /// variant is used when the iterator has been exhausted.
+    None,
 
     /// An iterator that returns an Item on calls to [`Iter::next()`].
     /// The Item is a [Result], so this variant
@@ -675,7 +678,8 @@ where
                             // MDBX_NODATA can occur when the cursor was previously sought to a
                             // non-existent value, e.g. iter_from with a
                             // key greater than all values in the database.
-                            ffi::MDBX_NOTFOUND | ffi::MDBX_ENODATA => None,
+                            // MDBX_RESULT_TRUE can occur when reading from an unpositioned cursor.
+                            ffi::MDBX_NOTFOUND | ffi::MDBX_ENODATA | ffi::MDBX_RESULT_TRUE => None,
                             error => Some(Err(Error::from_err_code(error))),
                         }
                     });
@@ -686,6 +690,7 @@ where
                 }
             }
             Iter::Err(err) => err.take().map(Err),
+            Iter::None => None,
         }
     }
 }

@@ -14,6 +14,17 @@ pub trait TableObject<'a>: Sized {
     fn decode(data_val: &[u8]) -> ReadResult<Self>;
 
     /// Decodes the value directly from the given MDBX_val pointer.
+    ///
+    /// We STRONGLY recommend you avoid implementing this method. It is used
+    /// internally during get operations to optimize deserialization for
+    /// certain types that borrow data directly from the database (like
+    /// `Cow<'a, [u8]>`).
+    ///
+    /// The data pointed to by `data_val` is good only for the lifetime of the
+    /// transaction, so be careful when implementing this method. In addition,
+    /// in the case of read-write transactions, the data may be "dirty"
+    /// (modified but not yet committed), so you may need to check for that
+    /// using `mdbx_is_dirty` before borrowing it.
     #[doc(hidden)]
     fn decode_val<K: TransactionKind>(
         _: &'a Transaction<K>,

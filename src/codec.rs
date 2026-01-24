@@ -43,11 +43,7 @@ impl<'a> TableObject<'a> for Cow<'a, [u8]> {
                     ffi::mdbx_is_dirty(_txn.txn(), data_val.iov_base)
                 })?;
 
-            Ok(if is_dirty {
-                Cow::Owned(s.to_vec())
-            } else {
-                Cow::Borrowed(s)
-            })
+            Ok(if is_dirty { Cow::Owned(s.to_vec()) } else { Cow::Borrowed(s) })
         }
     }
 }

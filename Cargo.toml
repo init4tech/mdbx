@@ -4,9 +4,32 @@ description = "Idiomatic and safe MDBX wrapper"
 version = "0.0.1"
 edition = "2024"
 rust-version = "1.92"
-license = "Apache-2.0 OR MIT"
-homepage = "https://github.com/init4tech/signet-mdbx"
-repository = "https://github.com/init4tech/signet-mdbx"
+license = "MIT OR Apache-2.0"
+homepage = "https://github.com/init4tech/mdbx"
+repository = "https://github.com/init4tech/mdbx"
+
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+debug = "line-tables-only"
+strip = true
+panic = "unwind"
+codegen-units = 16
+
+[profile.profiling]
+inherits = "release"
+debug = 2
+strip = false
+
+[profile.bench]
+inherits = "profiling"
+
+[profile.ci-rust]
+inherits = "dev"
+strip = true
+debug = false
+incremental = false
 
 [dependencies]
 signet-mdbx-sys= { version = "0.0.1", path = "mdbx-sys" }

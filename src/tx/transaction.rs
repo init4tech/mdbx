@@ -463,13 +463,8 @@ impl Transaction<RW> {
         });
 
         mdbx_result({
-            self.txn_execute(|txn| {
-                if let Some(d) = data_val {
-                    unsafe { ffi::mdbx_del(txn, dbi, &key_val, &d) }
-                } else {
-                    unsafe { ffi::mdbx_del(txn, dbi, &key_val, ptr::null()) }
-                }
-            })?
+            let ptr = data_val.as_ref().map_or(ptr::null(), |d| d as *const ffi::MDBX_val);
+            self.txn_execute(|txn| unsafe { ffi::mdbx_del(txn, dbi, &key_val, ptr) })?
         })
         .map(|_| true)
         .or_else(|e| match e {
@@ -585,7 +580,8 @@ impl TransactionPtr {
 
     /// Executes the given closure once the lock on the transaction is acquired.
     ///
-    /// Returns the result of the closure or an error if the transaction is timed out.
+    /// Returns the result of the closure or an error if the transaction is
+    /// timed out.
     #[inline]
     pub(crate) fn txn_execute_fail_on_timeout<F, T>(&self, f: F) -> MdbxResult<T>
     where
@@ -593,9 +589,9 @@ impl TransactionPtr {
     {
         let _lck = self.lock();
 
-        // No race condition with the `TxnManager` timing out the transaction is possible here,
-        // because we're taking a lock for any actions on the transaction pointer, including a call
-        // to the `mdbx_txn_reset`.
+        // No race condition with the `TxnManager` timing out the transaction
+        // is possible here, because we're taking a lock for any actions on the
+        // transaction pointer, including a call to the `mdbx_txn_reset`.
         #[cfg(feature = "read-tx-timeouts")]
         if self.is_timed_out() {
             return Err(MdbxError::ReadTransactionTimeout);
@@ -604,8 +600,8 @@ impl TransactionPtr {
         Ok((f)(self.txn))
     }
 
-    /// Executes the given closure once the lock on the transaction is acquired. If the transaction
-    /// is timed out, it will be renewed first.
+    /// Executes the given closure once the lock on the transaction is
+    /// acquired. If the transaction is timed out, it will be renewed first.
     ///
     /// Returns the result of the closure or an error if the transaction renewal fails.
     #[inline]

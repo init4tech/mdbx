@@ -173,14 +173,15 @@ mod read_transactions {
         max_duration: Duration,
         /// List of currently active read transactions.
         ///
-        /// We store `usize` instead of a raw pointer as a key, because pointers are not
-        /// comparable. The time of transaction opening is stored as a value.
+        /// We store `usize` instead of a raw pointer as a key, because
+        /// pointers are not comparable. The time of transaction opening is
+        /// stored as a value.
         ///
-        /// The backtrace of the transaction opening is recorded only when debug assertions are
-        /// enabled.
+        /// The backtrace of the transaction opening is recorded only when
+        /// debug assertions are enabled.
         active: DashMap<usize, (TransactionPtr, Instant, Option<Arc<Backtrace>>)>,
-        /// List of timed out transactions that were not aborted by the user yet, hence have a
-        /// dangling read transaction pointer.
+        /// List of timed out transactions that were not aborted by the user
+        /// yet, hence have a dangling read transaction pointer.
         timed_out_not_aborted: DashSet<usize>,
     }
 

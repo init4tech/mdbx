@@ -1,8 +1,11 @@
 mod cursor;
-pub use cursor::{Cursor, Iter, IterDup};
+pub use cursor::Cursor;
 
 mod database;
 pub use database::Database;
+
+/// Iterator utilities for cursors.
+pub mod iter;
 
 mod transaction;
 #[allow(unused_imports)] // this is used in some features

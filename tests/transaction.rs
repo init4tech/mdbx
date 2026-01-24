@@ -53,7 +53,7 @@ fn test_put_get_del_multi() {
     let dbi = txn.open_db(None).unwrap().dbi();
     {
         let mut cur = txn.cursor(dbi).unwrap();
-        let iter = cur.iter_dup_of::<(), [u8; 4]>(b"key1");
+        let iter = cur.iter_dup_of::<(), [u8; 4]>(b"key1").unwrap();
         let vals = iter.map(|x| x.unwrap()).map(|(_, x)| x).collect::<Vec<_>>();
         assert_eq!(vals, vec![*b"val1", *b"val2", *b"val3"]);
     }
@@ -69,11 +69,11 @@ fn test_put_get_del_multi() {
     let dbi = txn.open_db(None).unwrap().dbi();
     {
         let mut cur = txn.cursor(dbi).unwrap();
-        let iter = cur.iter_dup_of::<(), [u8; 4]>(b"key1");
+        let iter = cur.iter_dup_of::<(), [u8; 4]>(b"key1").unwrap();
         let vals = iter.map(|x| x.unwrap()).map(|(_, x)| x).collect::<Vec<_>>();
         assert_eq!(vals, vec![*b"val1", *b"val3"]);
 
-        let iter = cur.iter_dup_of::<(), ()>(b"key2");
+        let iter = cur.iter_dup_of::<[u8; 4], [u8; 4]>(b"key2").unwrap();
         assert_eq!(0, iter.count());
     }
     txn.commit().unwrap();
@@ -189,7 +189,7 @@ fn test_drop_db() {
             unsafe {
                 txn.drop_db(dbi).unwrap();
             }
-            assert!(matches!(txn.open_db(Some("test")).unwrap_err(), Error::NotFound));
+            assert!(matches!(txn.open_db(Some("test")).unwrap_err(), MdbxError::NotFound));
             txn.commit().unwrap();
         }
     }
@@ -198,7 +198,7 @@ fn test_drop_db() {
 
     let txn = env.begin_ro_txn().unwrap();
     txn.open_db(Some("canary")).unwrap();
-    assert!(matches!(txn.open_db(Some("test")).unwrap_err(), Error::NotFound));
+    assert!(matches!(txn.open_db(Some("test")).unwrap_err(), MdbxError::NotFound));
 }
 
 #[test]

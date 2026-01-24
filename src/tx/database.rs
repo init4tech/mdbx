@@ -1,6 +1,6 @@
 use crate::{
     Environment, Transaction, TransactionKind,
-    error::{Result, mdbx_result},
+    error::{MdbxResult, mdbx_result},
 };
 use ffi::MDBX_db_flags_t;
 use std::{ffi::CStr, ptr};
@@ -25,7 +25,7 @@ impl Database {
         txn: &Transaction<K>,
         name: Option<&str>,
         flags: MDBX_db_flags_t,
-    ) -> Result<Self> {
+    ) -> MdbxResult<Self> {
         let mut c_name_buf = smallvec::SmallVec::<[u8; 32]>::new();
         let c_name = name.map(|n| {
             c_name_buf.extend_from_slice(n.as_bytes());

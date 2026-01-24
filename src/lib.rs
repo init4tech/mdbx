@@ -18,7 +18,7 @@ pub use codec::*;
 pub use crate::sys::read_transactions::MaxReadTransactionDuration;
 
 mod error;
-pub use error::{Error, Result};
+pub use error::{MdbxError, MdbxResult, ReadError, ReadResult};
 
 mod flags;
 pub use flags::*;
@@ -30,9 +30,7 @@ pub use sys::{
 };
 
 mod tx;
-pub use tx::{
-    CommitLatency, Cursor, Database, Iter, IterDup, RO, RW, Transaction, TransactionKind,
-};
+pub use tx::{CommitLatency, Cursor, Database, RO, RW, Transaction, TransactionKind, iter};
 
 #[cfg(test)]
 mod test {

@@ -1,6 +1,6 @@
 use crate::{
     CommitLatency,
-    error::{Result, mdbx_result},
+    error::{MdbxResult, mdbx_result},
     sys::EnvPtr,
 };
 use std::{
@@ -14,9 +14,9 @@ unsafe impl Send for TxnPtr {}
 unsafe impl Sync for TxnPtr {}
 
 pub(crate) enum TxnManagerMessage {
-    Begin { parent: TxnPtr, flags: ffi::MDBX_txn_flags_t, sender: SyncSender<Result<TxnPtr>> },
-    Abort { tx: TxnPtr, sender: SyncSender<Result<bool>> },
-    Commit { tx: TxnPtr, sender: SyncSender<Result<(bool, CommitLatency)>> },
+    Begin { parent: TxnPtr, flags: ffi::MDBX_txn_flags_t, sender: SyncSender<MdbxResult<TxnPtr>> },
+    Abort { tx: TxnPtr, sender: SyncSender<MdbxResult<bool>> },
+    Commit { tx: TxnPtr, sender: SyncSender<MdbxResult<(bool, CommitLatency)>> },
 }
 
 /// Manages transactions by doing two things:
@@ -324,7 +324,7 @@ mod read_transactions {
     #[cfg(test)]
     mod tests {
         use crate::{
-            Environment, Error, MaxReadTransactionDuration,
+            Environment, MaxReadTransactionDuration, MdbxError,
             sys::txn_manager::read_transactions::READ_TRANSACTIONS_CHECK_INTERVAL,
         };
         use std::{thread::sleep, time::Duration};
@@ -382,11 +382,11 @@ mod read_transactions {
                 assert!(read_transactions.timed_out_not_aborted.contains(&tx_ptr));
 
                 // Use the timed out transaction and observe the `Error::ReadTransactionTimeout`
-                assert_eq!(tx.open_db(None).err(), Some(Error::ReadTransactionTimeout));
+                assert_eq!(tx.open_db(None).err(), Some(MdbxError::ReadTransactionTimeout));
                 assert!(!read_transactions.active.contains_key(&tx_ptr));
                 assert!(read_transactions.timed_out_not_aborted.contains(&tx_ptr));
 
-                assert_eq!(tx.id().err(), Some(Error::ReadTransactionTimeout));
+                assert_eq!(tx.id().err(), Some(MdbxError::ReadTransactionTimeout));
                 assert!(!read_transactions.active.contains_key(&tx_ptr));
                 assert!(read_transactions.timed_out_not_aborted.contains(&tx_ptr));
 

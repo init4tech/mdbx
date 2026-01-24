@@ -1,17 +1,24 @@
-use crate::{Error, Transaction, TransactionKind};
+use crate::error::ReadResult;
+use crate::{MdbxError, Transaction, TransactionKind};
 use std::{borrow::Cow, slice};
+
+/// A trait for types that can be deserialized from a database value without
+/// borrowing.
+pub trait TableObjectOwned: for<'de> TableObject<'de> {}
+
+impl<T> TableObjectOwned for T where T: for<'de> TableObject<'de> {}
 
 /// Implement this to be able to decode data values
 pub trait TableObject<'a>: Sized {
     /// Decodes the object from the given bytes.
-    fn decode(data_val: &[u8]) -> Result<Self, Error>;
+    fn decode(data_val: &[u8]) -> ReadResult<Self>;
 
     /// Decodes the value directly from the given MDBX_val pointer.
     #[doc(hidden)]
     fn decode_val<K: TransactionKind>(
         _: &'a Transaction<K>,
         data_val: ffi::MDBX_val,
-    ) -> Result<Self, Error> {
+    ) -> ReadResult<Self> {
         // SAFETY: the data val is borrowed from the inner mdbx transaction,
         // so it is valid for the lifetime of the transaction.
         let s = unsafe { slice::from_raw_parts(data_val.iov_base as *const u8, data_val.iov_len) };
@@ -20,7 +27,7 @@ pub trait TableObject<'a>: Sized {
 }
 
 impl<'a> TableObject<'a> for Cow<'a, [u8]> {
-    fn decode(_: &[u8]) -> Result<Self, Error> {
+    fn decode(_: &[u8]) -> ReadResult<Self> {
         unreachable!()
     }
 
@@ -28,7 +35,7 @@ impl<'a> TableObject<'a> for Cow<'a, [u8]> {
     fn decode_val<K: TransactionKind>(
         _txn: &'a Transaction<K>,
         data_val: ffi::MDBX_val,
-    ) -> Result<Self, Error> {
+    ) -> ReadResult<Self> {
         let s = unsafe { slice::from_raw_parts(data_val.iov_base as *const u8, data_val.iov_len) };
 
         #[cfg(feature = "return-borrowed")]
@@ -48,21 +55,18 @@ impl<'a> TableObject<'a> for Cow<'a, [u8]> {
     }
 }
 
-impl<'a> TableObject<'a> for Vec<u8> {
-    fn decode(data_val: &[u8]) -> Result<Self, Error> {
+impl TableObject<'_> for Vec<u8> {
+    fn decode(data_val: &[u8]) -> ReadResult<Self> {
         Ok(data_val.to_vec())
     }
 }
 
 impl<'a> TableObject<'a> for () {
-    fn decode(_: &[u8]) -> Result<Self, Error> {
+    fn decode(_: &[u8]) -> ReadResult<Self> {
         Ok(())
     }
 
-    fn decode_val<K: TransactionKind>(
-        _: &'a Transaction<K>,
-        _: ffi::MDBX_val,
-    ) -> Result<Self, Error> {
+    fn decode_val<K: TransactionKind>(_: &'a Transaction<K>, _: ffi::MDBX_val) -> ReadResult<Self> {
         Ok(())
     }
 }
@@ -71,16 +75,16 @@ impl<'a> TableObject<'a> for () {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ObjectLength(pub usize);
 
-impl<'a> TableObject<'a> for ObjectLength {
-    fn decode(data_val: &[u8]) -> Result<Self, Error> {
+impl TableObject<'_> for ObjectLength {
+    fn decode(data_val: &[u8]) -> ReadResult<Self> {
         Ok(Self(data_val.len()))
     }
 }
 
 impl<'a, const LEN: usize> TableObject<'a> for [u8; LEN] {
-    fn decode(data_val: &[u8]) -> Result<Self, Error> {
+    fn decode(data_val: &[u8]) -> ReadResult<Self> {
         if data_val.len() != LEN {
-            return Err(Error::DecodeErrorLenDiff);
+            return Err(MdbxError::DecodeErrorLenDiff.into());
         }
         let mut a = [0; LEN];
         a[..].copy_from_slice(data_val);

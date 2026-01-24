@@ -2,44 +2,142 @@ use crate::error::ReadResult;
 use crate::{MdbxError, Transaction, TransactionKind};
 use std::{borrow::Cow, slice};
 
-/// A trait for types that can be deserialized from a database value without
-/// borrowing.
-pub trait TableObjectOwned: for<'de> TableObject<'de> {}
+/// A marker trait for types that can be deserialized from a database value
+/// without borrowing from the transaction.
+///
+/// Types implementing this trait can be used with iterators that need to
+/// return owned values. This is automatically implemented for any type that
+/// implements [`TableObject<'a>`] for all lifetimes `'a`.
+///
+/// # Built-in Implementations
+///
+/// - [`Vec<u8>`] - Always copies data
+/// - `[u8; N]` - Copies into fixed-size array - may pan
+/// - `()` - Ignores data entirely
+/// - [`ObjectLength`] - Returns only the length
+pub trait TableObjectOwned: for<'de> TableObject<'de> {
+    /// Decodes the object from the given bytes.
+    ///
+    /// This is the primary method to implement. Return a [`ReadError`] if
+    /// the data cannot be decoded (e.g., wrong length, invalid format).
+    ///
+    /// If you need to borrow data directly from the database for zero-copy
+    /// deserialization, also implement [`decode_borrow`](Self::decode_borrow).
+    ///
+    /// [`ReadError`]: crate::ReadError
+    fn decode(data_val: &[u8]) -> ReadResult<Self> {
+        <Self as TableObject<'_>>::decode_borrow(Cow::Borrowed(data_val))
+    }
+}
 
 impl<T> TableObjectOwned for T where T: for<'de> TableObject<'de> {}
 
-/// Implement this to be able to decode data values
+/// Decodes values read from the database into Rust types.
+///
+/// Implement this trait to enable reading custom types directly from MDBX.
+/// The lifetime parameter `'a` allows types to borrow data from the
+/// transaction when appropriate (e.g., `Cow<'a, [u8]>`).
+///
+/// # Implementation Guide
+///
+/// For most types, only implement [`decode`](Self::decode). The default
+/// implementation of [`decode_val`](Self::decode_val) will call `decode`
+/// with the raw ffi bytes, and is easy to misuse.
+///
+/// # Zero-copy Deserialization
+///
+/// MDBX supports zero-copy deserialization for types that can borrow data
+/// directly from the database (like `Cow<'a, [u8]>`). Read-only transactions
+/// ALWAYS support borrowing, while read-write transactions require checking
+/// if the data is "dirty" (modified but not yet committed) first.
+///
+/// The `Cow<'a, [u8]>` implementation already borrows data directly from the
+/// database when possible, and falls back to copying when necessary. If you
+/// need similar behavior for your own types, we recommend wrapping a
+/// `Cow<'a, [u8]>`.
+///
+/// To take advantage of zero-copy deserialization, you MUST implement
+/// [`decode_borrow`](Self::decode_borrow) to handle the `Cow` case. The default
+///
+/// ```
+/// # use std::borrow::Cow;
+/// use signet_libmdbx::{TableObject, ReadResult, MdbxError};
+///
+/// struct MyZeroCopy<'a> (Cow<'a, [u8]>);
+///
+/// impl<'a> TableObject<'a> for MyZeroCopy<'a> {
+///     fn decode_borrow(data: Cow<'a, [u8]>) -> ReadResult<Self> {
+///        Ok(MyZeroCopy(data))
+///     }
+/// }
+/// ```
+///
+/// ## Fixed-Size Types
+///
+/// ```
+/// # use std::borrow::Cow;
+/// # use signet_libmdbx::{TableObject, ReadResult, MdbxError};
+/// struct Hash([u8; 32]);
+///
+/// impl TableObject<'_> for Hash {
+///     fn decode_borrow(data: Cow<'_, [u8]>) -> ReadResult<Self> {
+///         let arr: [u8; 32] = data.as_ref().try_into()
+///             .map_err(|_| MdbxError::DecodeErrorLenDiff)?;
+///         Ok(Self(arr))
+///     }
+/// }
+/// ```
+///
+/// ## Variable-Size Types
+///
+/// ```
+/// # use std::borrow::Cow;
+/// # use signet_libmdbx::{TableObject, ReadResult, MdbxError};
+/// struct VarInt(u64);
+///
+/// impl TableObject<'_> for VarInt {
+///     fn decode_borrow(data: Cow<'_, [u8]>) -> ReadResult<Self> {
+///         // Example: decode LEB128 or similar
+///         let value = data.iter()
+///             .take(8)
+///             .enumerate()
+///             .fold(0u64, |acc, (i, &b)| acc | ((b as u64) << (i * 8)));
+///         Ok(Self(value))
+///     }
+/// }
+/// ```
 pub trait TableObject<'a>: Sized {
-    /// Decodes the object from the given bytes.
-    fn decode(data_val: &[u8]) -> ReadResult<Self>;
+    /// Creates the object from a `Cow` of bytes. This allows for efficient
+    /// handling of both owned and borrowed data.
+    fn decode_borrow(data: Cow<'a, [u8]>) -> ReadResult<Self>;
 
     /// Decodes the value directly from the given MDBX_val pointer.
     ///
-    /// We STRONGLY recommend you avoid implementing this method. It is used
-    /// internally during get operations to optimize deserialization for
-    /// certain types that borrow data directly from the database (like
-    /// `Cow<'a, [u8]>`).
+    /// **Do not implement this unless you need zero-copy borrowing.**
     ///
-    /// The data pointed to by `data_val` is good only for the lifetime of the
-    /// transaction, so be careful when implementing this method. In addition,
-    /// in the case of read-write transactions, the data may be "dirty"
-    /// (modified but not yet committed), so you may need to check for that
-    /// using `mdbx_is_dirty` before borrowing it.
+    /// This method is used internally to optimize deserialization for types
+    /// that borrow data directly from the database (like `Cow<'a, [u8]>`).
+    ///
+    /// # Safety Considerations
+    ///
+    /// The data pointed to by `data_val` is only valid for the lifetime of
+    /// the transaction. In read-write transactions, the data may be "dirty"
+    /// (modified but not yet committed), requiring a copy via `mdbx_is_dirty`
+    /// before borrowing.
     #[doc(hidden)]
+    #[inline(always)]
     fn decode_val<K: TransactionKind>(
-        _: &'a Transaction<K>,
+        tx: &'a Transaction<K>,
         data_val: ffi::MDBX_val,
     ) -> ReadResult<Self> {
-        // SAFETY: the data val is borrowed from the inner mdbx transaction,
-        // so it is valid for the lifetime of the transaction.
-        let s = unsafe { slice::from_raw_parts(data_val.iov_base as *const u8, data_val.iov_len) };
-        Self::decode(s)
+        let cow = Cow::<'a, [u8]>::decode_val::<K>(tx, data_val)?;
+        Self::decode_borrow(cow)
     }
 }
 
 impl<'a> TableObject<'a> for Cow<'a, [u8]> {
-    fn decode(_: &[u8]) -> ReadResult<Self> {
-        unreachable!()
+    fn decode_borrow(data: Cow<'a, [u8]>) -> ReadResult<Self> {
+        Ok(data)
     }
 
     #[doc(hidden)]
@@ -67,13 +165,13 @@ impl<'a> TableObject<'a> for Cow<'a, [u8]> {
 }
 
 impl TableObject<'_> for Vec<u8> {
-    fn decode(data_val: &[u8]) -> ReadResult<Self> {
-        Ok(data_val.to_vec())
+    fn decode_borrow(data: Cow<'_, [u8]>) -> ReadResult<Self> {
+        Ok(data.into_owned())
     }
 }
 
 impl<'a> TableObject<'a> for () {
-    fn decode(_: &[u8]) -> ReadResult<Self> {
+    fn decode_borrow(_: Cow<'a, [u8]>) -> ReadResult<Self> {
         Ok(())
     }
 
@@ -87,18 +185,18 @@ impl<'a> TableObject<'a> for () {
 pub struct ObjectLength(pub usize);
 
 impl TableObject<'_> for ObjectLength {
-    fn decode(data_val: &[u8]) -> ReadResult<Self> {
-        Ok(Self(data_val.len()))
+    fn decode_borrow(data: Cow<'_, [u8]>) -> ReadResult<Self> {
+        Ok(Self(data.len()))
     }
 }
 
 impl<'a, const LEN: usize> TableObject<'a> for [u8; LEN] {
-    fn decode(data_val: &[u8]) -> ReadResult<Self> {
-        if data_val.len() != LEN {
+    fn decode_borrow(data: Cow<'a, [u8]>) -> ReadResult<Self> {
+        if data.len() != LEN {
             return Err(MdbxError::DecodeErrorLenDiff.into());
         }
         let mut a = [0; LEN];
-        a[..].copy_from_slice(data_val);
+        a[..].copy_from_slice(&data);
         Ok(a)
     }
 }

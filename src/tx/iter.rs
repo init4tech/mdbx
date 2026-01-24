@@ -1,3 +1,60 @@
+//! Iterator types for traversing MDBX databases.
+//!
+//! This module provides lending iterators over key-value pairs in MDBX
+//! databases. The iterators support both borrowed and owned access patterns.
+//!
+//! # Iterator Types
+//!
+//! - [`Iter`]: Base iterator with configurable cursor operation
+//! - [`IterKeyVals`]: Iterates over all key-value pairs (`MDBX_NEXT`)
+//! - [`IterDupKeys`]: For `DUPSORT` databases, yields first value per key
+//! - [`IterDupVals`]: For `DUPSORT` databases, yields all values for one key
+//! - [`IterDup`]: Nested iteration over `DUPSORT` databases
+//!
+//! # Borrowing vs Owning
+//!
+//! Iterators provide two ways to access data:
+//!
+//! - [`borrow_next()`](Iter::borrow_next): Returns data potentially borrowed
+//!   from the database. Requires the `Key` and `Value` types to implement
+//!   [`TableObject<'tx>`](crate::TableObject). This can avoid allocations
+//!   when using `Cow<'tx, [u8]>`.
+//!
+//! - [`owned_next()`](Iter::owned_next): Returns owned data. Requires
+//!   [`TableObjectOwned`]. Always safe but may allocate.
+//!
+//! The standard [`Iterator`] trait is implemented via `owned_next()`.
+//!
+//! # Dirty Page Handling
+//!
+//! In read-write transactions, database pages may be "dirty" (modified but
+//! not yet committed). The behavior of `Cow<[u8]>` depends on the
+//! `return-borrowed` feature:
+//!
+//! - **With `return-borrowed`**: Always returns `Cow::Borrowed`, even for
+//!   dirty pages. This is faster but the data may change if the transaction
+//!   modifies it later.
+//!
+//! - **Without `return-borrowed`** (default): Dirty pages are copied to
+//!   `Cow::Owned`. This is safer but allocates more.
+//!
+//! # Example
+//!
+//! ```no_run
+//! # use signet_libmdbx::Environment;
+//! # use std::path::Path;
+//! # let env = Environment::builder().open(Path::new("/tmp/iter_example")).unwrap();
+//! let txn = env.begin_ro_txn().unwrap();
+//! let db = txn.open_db(None).unwrap();
+//! let mut cursor = txn.cursor(db.dbi()).unwrap();
+//!
+//! // Iterate using the standard Iterator trait (owned)
+//! for result in cursor.iter_start::<Vec<u8>, Vec<u8>>().unwrap() {
+//!     let (key, value) = result.expect("decode error");
+//!     println!("{:?} => {:?}", key, value);
+//! }
+//! ```
+
 use crate::{
     Cursor, MdbxError, ReadResult, TableObject, TableObjectOwned, Transaction, TransactionKind,
     error::mdbx_result,
@@ -54,7 +111,7 @@ enum IterState<'tx, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> {
 /// Whether borrowing is possible depends on the implementation of
 /// [`TableObject`] for both `Key` and `Value`.
 pub struct Iter<
-    'tx: 'cur,
+    'tx,
     'cur,
     K: TransactionKind,
     Key = Cow<'tx, [u8]>,
@@ -64,6 +121,17 @@ pub struct Iter<
     cursor: Cow<'cur, Cursor<'tx, K>>,
     state: IterState<'tx, Key, Value>,
     _marker: PhantomData<fn() -> (Key, Value)>,
+}
+
+impl<K, Key, Value, const OP: u32> core::fmt::Debug for Iter<'_, '_, K, Key, Value, OP>
+where
+    K: TransactionKind,
+    Key: core::fmt::Debug,
+    Value: core::fmt::Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Iter").finish()
+    }
 }
 
 impl<'tx: 'cur, 'cur, K, Key, Value, const OP: u32> Iter<'tx, 'cur, K, Key, Value, OP>
@@ -242,14 +310,19 @@ where
 
 /// An iterator over the key/value pairs in an MDBX database with duplicate
 /// keys.
-pub struct IterDup<
-    'tx: 'cur,
-    'cur,
-    K: TransactionKind,
-    Key = Cow<'tx, [u8]>,
-    Value = Cow<'tx, [u8]>,
-> {
+pub struct IterDup<'tx, 'cur, K: TransactionKind, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> {
     inner: IterDupKeys<'tx, 'cur, K, Key, Value>,
+}
+
+impl<'tx, 'cur, K, Key, Value> core::fmt::Debug for IterDup<'tx, 'cur, K, Key, Value>
+where
+    K: TransactionKind,
+    Key: core::fmt::Debug,
+    Value: core::fmt::Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IterDup").finish()
+    }
 }
 
 impl<'tx, 'cur, K, Key, Value> IterDup<'tx, 'cur, K, Key, Value>

@@ -24,6 +24,7 @@ mod private {
     impl Sealed for RW {}
 }
 
+/// Marker trait for transaction kinds. Either [`RO`] or [`RW`].
 pub trait TransactionKind: private::Sealed + Send + Sync + Debug + 'static {
     #[doc(hidden)]
     const OPEN_FLAGS: MDBX_txn_flags_t;
@@ -33,12 +34,14 @@ pub trait TransactionKind: private::Sealed + Send + Sync + Debug + 'static {
     const IS_READ_ONLY: bool;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
+/// Marker type for read-only transactions.
 pub struct RO;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
+/// Marker type for read-write transactions.
 pub struct RW;
 
 impl TransactionKind for RO {
@@ -367,16 +370,20 @@ impl Transaction<RW> {
 
     /// Opens a handle to an MDBX database, creating the database if necessary.
     ///
-    /// If the database is already created, the given option flags will be added to it.
+    /// If the database is already created, the given option flags will be
+    /// added to it.
     ///
-    /// If `name` is [None], then the returned handle will be for the default database.
+    /// If `name` is [None], then the returned handle will be for the default
+    /// database.
     ///
-    /// If `name` is not [None], then the returned handle will be for a named database. In this
-    /// case the environment must be configured to allow named databases through
-    /// [`EnvironmentBuilder::set_max_dbs()`](crate::EnvironmentBuilder::set_max_dbs).
+    /// If `name` is not [None], then the returned handle will be for a named
+    /// database. In this case the environment must be configured to allow
+    /// named databases through [`EnvironmentBuilder::set_max_dbs()`].
     ///
-    /// This function will fail with [`Error::BadRslot`] if called by a thread with an open
-    /// transaction.
+    /// This function will fail with [`MdbxError::BadRslot`] if called by a
+    /// thread with an open transaction.
+    ///
+    /// [`EnvironmentBuilder::set_max_dbs()`]: crate::EnvironmentBuilder::set_max_dbs
     pub fn create_db(&self, name: Option<&str>, flags: DatabaseFlags) -> MdbxResult<Database> {
         self.open_db_with_flags(name, flags | DatabaseFlags::CREATE)
     }
@@ -415,9 +422,10 @@ impl Transaction<RW> {
     ///
     /// # Safety
     ///
-    /// The caller must ensure that the returned buffer is not used after the transaction is
-    /// committed or aborted, or if another value is inserted. To be clear: the second call to
-    /// this function is not permitted while the returned slice is reachable.
+    /// The caller must ensure that the returned buffer is not used after the
+    /// transaction is committed or aborted, or if another value is inserted.
+    /// To be clear: the second call to this function is not permitted while
+    /// the returned slice is reachable.
     #[allow(clippy::mut_from_ref)]
     pub unsafe fn reserve(
         &self,
@@ -437,6 +445,22 @@ impl Transaction<RW> {
             })?)?;
             Ok(slice::from_raw_parts_mut(data_val.iov_base as *mut u8, data_val.iov_len))
         }
+    }
+
+    /// Reserves space for a value of the given length at the given key, and
+    /// calls the given closure with a mutable slice to write into.
+    ///
+    /// This is a safe wrapper around [`Transaction::reserve`].
+    pub fn with_reservation(
+        &self,
+        dbi: ffi::MDBX_dbi,
+        key: impl AsRef<[u8]>,
+        len: usize,
+        f: impl FnOnce(&mut [u8]),
+    ) -> MdbxResult<()> {
+        let buf = unsafe { self.reserve(dbi, key, len, WriteFlags::empty())? };
+        f(buf);
+        Ok(())
     }
 
     /// Delete items from a database.
@@ -625,7 +649,7 @@ impl TransactionPtr {
 ///
 /// Contains information about latency of commit stages.
 /// Inner struct stores this info in 1/65536 of seconds units.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 #[repr(transparent)]
 pub struct CommitLatency(ffi::MDBX_commit_latency);
 

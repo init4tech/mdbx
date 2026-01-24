@@ -103,10 +103,16 @@ pub enum SyncMode {
     UtterlyNoSync,
 }
 
+/// Environment mode (read-only or read-write).
 #[derive(Clone, Copy, Debug)]
 pub enum Mode {
+    /// Read-only mode.
     ReadOnly,
-    ReadWrite { sync_mode: SyncMode },
+    /// Read-write mode with specified sync mode.
+    ReadWrite {
+        /// Sync mode for write transactions.
+        sync_mode: SyncMode,
+    },
 }
 
 impl Default for Mode {
@@ -136,19 +142,27 @@ impl FromStr for SyncMode {
     }
 }
 
+/// Environment opening flags.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct EnvironmentFlags {
+    /// Do not create a subdirectory for the environment.
     pub no_sub_dir: bool,
+    /// Open the environment in exclusive mode.
     pub exclusive: bool,
     /// Flag is intended to open an existing sub-database which was created with unknown flags
     /// In such cases, instead of returning the `MDBX_INCOMPATIBLE` error, the sub-database will be
     /// opened with flags which it was created, and then an application could determine the actual
     /// flags.
     pub accede: bool,
+    /// Environment mode (RO/RW).
     pub mode: Mode,
+    /// Disable read-ahead.
     pub no_rdahead: bool,
+    /// Do not initialize memory before writing to it.
     pub no_meminit: bool,
+    /// Enable page coalescing.
     pub coalesce: bool,
+    /// Enable LIFO reclamation of pages.
     pub liforeclaim: bool,
 }
 
@@ -209,13 +223,31 @@ bitflags! {
     #[doc="Database options."]
     #[derive(Default, Clone, Copy)]
     pub struct DatabaseFlags: MDBX_env_flags_t {
+        /// Use reverse string comparison for keys.
         const REVERSE_KEY = MDBX_REVERSEKEY;
+        /// Use sorted duplicates, i.e. allow multi-values for a keys.
         const DUP_SORT = MDBX_DUPSORT;
+        /// Numeric keys in native byte order either uint32_t or uint64_t (must
+        /// be one of uint32_t or uint64_t, other integer types, for example,
+        /// signed integer or uint16_t will not work). The keys must all be of
+        /// the same size and must be aligned while passing as arguments.
         const INTEGER_KEY = MDBX_INTEGERKEY;
+        /// With MDBX_DUPSORT; sorted dup items have fixed size. The data
+        /// values must all be of the same size.
         const DUP_FIXED = MDBX_DUPFIXED;
+        /// With MDBX_DUPSORT and with MDBX_DUPFIXED; dups are fixed size like
+        /// MDBX_INTEGERKEY -style integers. The data values must all be of the
+        /// same size and must be aligned while passing as arguments.
         const INTEGER_DUP = MDBX_INTEGERDUP;
+        /// With MDBX_DUPSORT; use reverse string comparison for data values.
         const REVERSE_DUP = MDBX_REVERSEDUP;
+        /// Create DB if not already existing.
         const CREATE = MDBX_CREATE;
+        /// Open an existing table which may be open by another process
+        /// with unknown mode/flags. In such cases, instead of returning the
+        /// `MDBX_INCOMPATIBLE` error, the database will be opened with flags
+        /// which it was created, and then an application could determine the
+        /// actual flags.
         const ACCEDE = MDBX_DB_ACCEDE;
     }
 }
@@ -224,14 +256,32 @@ bitflags! {
     #[doc="Write options."]
     #[derive(Default, Clone, Copy)]
     pub struct WriteFlags: MDBX_env_flags_t {
+        /// Upsertion by default (without any other flags)
         const UPSERT = MDBX_UPSERT;
+        /// For insertion: Don't write if the key already exists.
         const NO_OVERWRITE = MDBX_NOOVERWRITE;
+        /// Has effect only for MDBX_DUPSORT tables. For upsertion: don't write
+        /// if the key-value pair already exist.
         const NO_DUP_DATA = MDBX_NODUPDATA;
+        /// For upsertion: overwrite the current key/data pair. MDBX allows
+        /// this flag for mdbx_put() for explicit overwrite/update without
+        /// insertion. For deletion: remove only single entry at the current
+        /// cursor position.
         const CURRENT = MDBX_CURRENT;
+        /// Has effect only for MDBX_DUPSORT tables. For deletion: remove all
+        /// multi-values (aka duplicates) for given key. For upsertion: replace
+        /// all multi-values for given key with a new one.
         const ALLDUPS = MDBX_ALLDUPS;
+        /// For upsertion: Just reserve space for data, don't copy it. Return a
+        /// pointer to the reserved space.
         const RESERVE = MDBX_RESERVE;
+        /// Data is being appended. Don't split full pages, continue on a new
+        /// instead.
         const APPEND = MDBX_APPEND;
+        /// Has effect only for MDBX_DUPSORT tables. Duplicate data is being
+        /// appended. Don't split full pages, continue on a new instead.
         const APPEND_DUP = MDBX_APPENDDUP;
+        /// Only for MDBX_DUPFIXED. Store multiple data items in one call.
         const MULTIPLE = MDBX_MULTIPLE;
     }
 }

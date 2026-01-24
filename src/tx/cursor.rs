@@ -38,7 +38,7 @@ where
     /// Creates a cursor from a raw MDBX cursor pointer.
     ///
     /// This function must only be used when you are certain that the provided
-    pub(crate) fn new_raw(txn: &'tx Transaction<K>, cursor: *mut ffi::MDBX_cursor) -> Self {
+    pub(crate) const fn new_raw(txn: &'tx Transaction<K>, cursor: *mut ffi::MDBX_cursor) -> Self {
         Self { txn, cursor }
     }
 
@@ -59,7 +59,7 @@ where
     }
 
     /// Returns the transaction associated with this cursor.
-    pub(crate) fn txn(&self) -> &'tx Transaction<K> {
+    pub(crate) const fn txn(&self) -> &'tx Transaction<K> {
         self.txn
     }
 
@@ -461,13 +461,9 @@ where
         Key: TableObject<'tx> + PartialEq,
         Value: TableObject<'tx>,
     {
-        let Some(first) = self.set_range(key)? else {
+        let Some(first) = self.set_key(key.as_ref())? else {
             return Ok(IterDupVals::end_from_ref(self));
         };
-
-        if first.0 != Key::decode(key)? {
-            return Ok(IterDupVals::end_from_ref(self));
-        }
 
         Ok(IterDupVals::from_ref_with(self, first))
     }

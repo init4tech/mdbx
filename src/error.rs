@@ -85,15 +85,18 @@ pub enum MdbxError {
     /// Page has no more space.
     #[error("page has no more space")]
     PageFull,
-    /// The database engine was unable to extend mapping, e.g. the address space is unavailable or
-    /// busy.
+    /// The database engine was unable to extend mapping, e.g. the address
+    /// space is unavailable or busy.
     ///
     /// This can mean:
-    /// - The database size was extended by other processes beyond the environment map size, and
-    ///   the engine was unable to extend the mapping while starting a read transaction. The
-    ///   environment should be re-opened to continue.
-    /// - The engine was unable to extend the mapping during a write transaction or an explicit
-    ///   call to change the geometry of the environment.
+    ///
+    /// - The database size was extended by other processes beyond the
+    ///   environment map size, and the engine was unable to extend the mapping
+    ///   while starting a read transaction. The environment should be
+    ///   re-opened to continue.
+    /// - The engine was unable to extend the mapping during a write
+    ///   transaction or an explicit call to change the geometry of the
+    ///   environment.
     #[error("database engine was unable to extend mapping")]
     UnableExtendMapSize,
     /// Environment or database is not compatible with the requested operation or flags.
@@ -123,8 +126,8 @@ pub enum MdbxError {
     /// Wrong signature of a runtime object(s).
     #[error("wrong signature of a runtime object(s)")]
     BadSignature,
-    /// Database should be recovered, but cannot be done automatically since it's in read-only
-    /// mode.
+    /// Database should be recovered, but cannot be done automatically since
+    /// it's in read-only mode.
     #[error(
         "database should be recovered, but cannot be done automatically since it's in read-only mode"
     )]
@@ -145,16 +148,18 @@ pub enum MdbxError {
     TooLarge,
     /// Decode error length difference:
     ///
-    /// An invalid parameter was specified, or the environment has an active write transaction.
+    /// An invalid parameter was specified, or the environment has an active
+    /// write transaction.
     #[error("invalid parameter specified or active write transaction")]
     DecodeErrorLenDiff,
     /// If the [Environment](crate::Environment) was opened with
-    /// [`EnvironmentKind::WriteMap`](crate::EnvironmentKind::WriteMap) flag, nested transactions
-    /// are not supported.
+    /// [`EnvironmentKind::WriteMap`](crate::EnvironmentKind::WriteMap) flag,
+    /// nested transactions are not supported.
     #[error("nested transactions are not supported with WriteMap")]
     NestedTransactionsUnsupportedWithWriteMap,
-    /// If the [Environment](crate::Environment) was opened with in read-only mode
-    /// [`Mode::ReadOnly`](crate::flags::Mode::ReadOnly), write transactions can't be opened.
+    /// If the [Environment](crate::Environment) was opened with in read-only
+    /// mode [`Mode::ReadOnly`](crate::flags::Mode::ReadOnly), write
+    /// transactions can't be opened.
     #[error("write transactions are not supported in read-only mode")]
     WriteTransactionUnsupportedInReadOnlyMode,
     /// Read transaction has been timed out.
@@ -162,8 +167,8 @@ pub enum MdbxError {
     ReadTransactionTimeout,
     /// The transaction commit was aborted due to previous errors.
     ///
-    /// This can happen in exceptionally rare cases and it signals the problem coming from inside
-    /// of mdbx.
+    /// This can happen in exceptionally rare cases and it signals the problem
+    /// coming from inside of mdbx.
     #[error("botched transaction")]
     BotchedTransaction,
     /// Permission defined
@@ -175,7 +180,7 @@ pub enum MdbxError {
 }
 
 impl MdbxError {
-    /// Converts a raw error code to an [Error].
+    /// Converts a raw error code to an [`MdbxError`].
     pub const fn from_err_code(err_code: c_int) -> Self {
         match err_code {
             ffi::MDBX_KEYEXIST => Self::KeyExist,
@@ -212,7 +217,7 @@ impl MdbxError {
         }
     }
 
-    /// Converts an [Error] to the raw error code.
+    /// Converts an [`MdbxError`] to the raw error code.
     pub const fn to_err_code(&self) -> i32 {
         match self {
             Self::KeyExist => ffi::MDBX_KEYEXIST,
@@ -300,6 +305,8 @@ pub(crate) const fn mdbx_result_unit(err_code: c_int) -> MdbxResult<()> {
     }
 }
 
+/// Unwrap a `Result<Option<T>, MdbxError>`, or return `Ok(None)` if the error
+/// is `NotFound` or `NoData`.
 #[macro_export]
 macro_rules! mdbx_try_optional {
     ($expr:expr) => {{
@@ -311,6 +318,7 @@ macro_rules! mdbx_try_optional {
     }};
 }
 
+/// Like `mdbx_try_optional!` but for [`ReadError`].
 #[macro_export]
 macro_rules! codec_try_optional {
     ($expr:expr) => {{

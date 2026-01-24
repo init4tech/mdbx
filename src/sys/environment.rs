@@ -226,8 +226,11 @@ impl Environment {
 
 /// Container type for Environment internals.
 ///
-/// This holds the raw pointer to the MDBX environment and the transaction manager.
-/// The env is opened via [`mdbx_env_create`](ffi::mdbx_env_create) and closed when this type drops.
+/// This holds the raw pointer to the MDBX environment and the transaction
+/// manager.
+///
+/// The env is opened via [`mdbx_env_create`](ffi::mdbx_env_create) and closed
+/// when this type drops.
 struct EnvironmentInner {
     /// The raw pointer to the MDBX environment.
     ///
@@ -248,8 +251,8 @@ impl Drop for EnvironmentInner {
     }
 }
 
-// SAFETY: internal type, only used inside [Environment]. Accessing the environment pointer is
-// thread-safe
+// SAFETY: internal type, only used inside [Environment]. Accessing the
+// environment pointer is thread-safe
 unsafe impl Send for EnvironmentInner {}
 unsafe impl Sync for EnvironmentInner {}
 
@@ -262,12 +265,14 @@ pub enum EnvironmentKind {
     #[default]
     Default,
     /// Open the environment as mdbx-WRITEMAP.
-    /// Use a writeable memory map unless the environment is opened as `MDBX_RDONLY`
-    /// ([`crate::Mode::ReadOnly`]).
     ///
-    /// All data will be mapped into memory in the read-write mode [`crate::Mode::ReadWrite`]. This
-    /// offers a significant performance benefit, since the data will be modified directly in
-    /// mapped memory and then flushed to disk by single system call, without any memory
+    /// Use a writeable memory map unless the environment is opened as
+    /// `MDBX_RDONLY` ([`crate::Mode::ReadOnly`]).
+    ///
+    /// All data will be mapped into memory in the read-write mode
+    /// [`crate::Mode::ReadWrite`]. This offers a significant performance
+    /// benefit, since the data will be modified directly in mapped memory and
+    /// then flushed to disk by single system call, without any memory
     /// management nor copying.
     ///
     /// This mode is incompatible with nested transactions.
@@ -297,8 +302,9 @@ unsafe impl Sync for EnvPtr {}
 
 /// Environment statistics.
 ///
-/// Contains information about the size and layout of an MDBX environment or database.
-#[derive(Debug)]
+/// Contains information about the size and layout of an MDBX environment or
+/// database.
+#[derive(Debug, Clone, Copy)]
 #[repr(transparent)]
 pub struct Stat(ffi::MDBX_stat);
 
@@ -315,7 +321,8 @@ impl Stat {
 }
 
 impl Stat {
-    /// Size of a database page. This is the same for all databases in the environment.
+    /// Size of a database page. This is the same for all databases in the
+    /// environment.
     #[inline]
     pub const fn page_size(&self) -> u32 {
         self.0.ms_psize
@@ -352,11 +359,12 @@ impl Stat {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 #[repr(transparent)]
 pub struct GeometryInfo(ffi::MDBX_envinfo__bindgen_ty_1);
 
 impl GeometryInfo {
+    /// Minimum geometry setting of the environment.
     pub const fn min(&self) -> u64 {
         self.0.lower
     }
@@ -364,12 +372,14 @@ impl GeometryInfo {
 
 /// Environment information.
 ///
-/// Contains environment information about the map size, readers, last txn id etc.
+/// Contains environment information about the map size, readers, last txn id
+/// etc.
 #[derive(Debug)]
 #[repr(transparent)]
 pub struct Info(ffi::MDBX_envinfo);
 
 impl Info {
+    /// Geometry settings of the environment.
     pub const fn geometry(&self) -> GeometryInfo {
         GeometryInfo(self.0.mi_geo)
     }
@@ -451,14 +461,18 @@ impl fmt::Debug for Environment {
 // Environment Builder
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Page size settings for the database environment
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PageSize {
+    /// Determine a page size automatically based on the underlying system.
     MinimalAcceptable,
+    /// Use the specified page size in bytes.
     Set(usize),
 }
 
-/// Statistics of page operations overall of all (running, completed and aborted) transactions
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Statistics of page operations overall of all (running, completed and
+/// aborted) transactions
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PageOps {
     /// Quantity of a new pages added
     pub newly: u64,
@@ -491,8 +505,11 @@ pub struct PageOps {
 pub struct Geometry<R> {
     /// The size range in bytes.
     pub size: Option<R>,
+    /// The growth step in bytes.
     pub growth_step: Option<isize>,
+    /// The shrink threshold in bytes.
     pub shrink_threshold: Option<isize>,
+    /// The page size.
     pub page_size: Option<PageSize>,
 }
 
@@ -502,13 +519,14 @@ impl<R> Default for Geometry<R> {
     }
 }
 
-/// Handle-Slow-Readers callback function to resolve database full/overflow issue due to a reader(s)
-/// which prevents the old data from being recycled.
+/// Handle-Slow-Readers callback function to resolve database full/overflow
+/// issue due to a reader(s) which prevents the old data from being recycled.
 ///
-/// Read transactions prevent reuse of pages freed by newer write transactions, thus the database
-/// can grow quickly. This callback will be called when there is not enough space in the database
-/// (i.e. before increasing the database size or before `MDBX_MAP_FULL` error) and thus can be
-/// used to resolve issues with a "long-lived" read transactions.
+/// Read transactions prevent reuse of pages freed by newer write transactions,
+/// thus the database can grow quickly. This callback will be called when there
+/// is not enough  space in the database (i.e. before increasing the database
+/// size or before `MDBX_MAP_FULL` error) and thus can be used to resolve
+/// issues with a "long-lived" read transactions.
 ///
 /// Depending on the arguments and needs, your implementation may wait,
 /// terminate a process or thread that is performing a long read, or perform
@@ -521,30 +539,35 @@ impl<R> Default for Geometry<R> {
 /// * `thread_id` – A thread id of the reader thread.
 /// * `read_txn_id` – An oldest read transaction number on which stalled.
 /// * `gap` – A lag from the last committed txn.
-/// * `space` – A space that actually become available for reuse after this reader finished. The
-///   callback function can take this value into account to evaluate the impact that a long-running
+/// * `space` – A space that actually become available for reuse after this
+///   reader finished. The callback function can take this value into account
+///   to evaluate the impact that a long-running
 ///   transaction has.
-/// * `retry` – A retry number starting from 0. If callback has returned 0 at least once, then at
-///   end of current handling loop the callback function will be called additionally with negative
-///   `retry` value to notify about the end of loop. The callback function can use this fact to
-///   implement timeout reset logic while waiting for a readers.
+/// * `retry` – A retry number starting from 0. If callback has returned 0 at
+///   least once, then at end of current handling loop the callback function
+///   will be called additionally with negative `retry` value to notify about
+///   the end of loop. The callback function can use this fact to implement
+///   timeout reset logic while waiting for a readers.
 ///
 /// # Returns
 ///
-/// A return code that determines the further actions for MDBX and must match the action which
-/// was executed by the callback:
+/// A return code that determines the further actions for MDBX and must match
+/// the action which was executed by the callback:
+///
 /// * `-2` or less – An error condition and the reader was not killed.
-/// * `-1` – The callback was unable to solve the problem and agreed on `MDBX_MAP_FULL` error; MDBX
-///   should increase the database size or return `MDBX_MAP_FULL` error.
-/// * `0` – The callback solved the problem or just waited for a while, libmdbx should rescan the
-///   reader lock table and retry. This also includes a situation when corresponding transaction
-///   terminated in normal way by `mdbx_txn_abort()` or `mdbx_txn_reset()`, and may be restarted.
-///   I.e. reader slot isn't needed to be cleaned from transaction.
-/// * `1` – Transaction aborted asynchronous and reader slot should be cleared immediately, i.e.
-///   read transaction will not continue but `mdbx_txn_abort()` nor `mdbx_txn_reset()` will be
-///   called later.
-/// * `2` or greater – The reader process was terminated or killed, and MDBX should entirely reset
-///   reader registration.
+/// * `-1` – The callback was unable to solve the problem and agreed on
+///   `MDBX_MAP_FULL` error; MDBX should increase the database size or return
+///   `MDBX_MAP_FULL` error.
+/// * `0` – The callback solved the problem or just waited for a while, libmdbx
+///   should rescan the reader lock table and retry. This also includes a
+///   situation when corresponding transaction terminated in normal way by
+///   `mdbx_txn_abort()` or `mdbx_txn_reset()`, and may be restarted. I.e.
+///   reader slot isn't needed to be cleaned from transaction.
+/// * `1` – Transaction aborted asynchronous and reader slot should be cleared
+///   immediately, i.e. read transaction will not continue but
+///   `mdbx_txn_abort()` nor `mdbx_txn_reset()` will be called later.
+/// * `>=2` – The reader process was terminated or killed, and MDBX should
+///   entirely reset reader registration.
 pub type HandleSlowReadersCallback = extern "C" fn(
     env: *const ffi::MDBX_env,
     txn: *const ffi::MDBX_txn,
@@ -556,25 +579,28 @@ pub type HandleSlowReadersCallback = extern "C" fn(
     retry: std::ffi::c_int,
 ) -> HandleSlowReadersReturnCode;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
+/// Return codes for the Handle-Slow-Readers callback function.
 pub enum HandleSlowReadersReturnCode {
     /// An error condition and the reader was not killed.
     Error = -2,
-    /// The callback was unable to solve the problem and agreed on `MDBX_MAP_FULL` error;
-    /// MDBX should increase the database size or return `MDBX_MAP_FULL` error.
+    /// The callback was unable to solve the problem and agreed on
+    /// `MDBX_MAP_FULL` error; MDBX should increase the database size or return
+    /// `MDBX_MAP_FULL` error.
     ProceedWithoutKillingReader = -1,
-    /// The callback solved the problem or just waited for a while, libmdbx should rescan the
-    /// reader lock table and retry. This also includes a situation when corresponding transaction
-    /// terminated in normal way by `mdbx_txn_abort()` or `mdbx_txn_reset()`, and may be restarted.
-    /// I.e. reader slot isn't needed to be cleaned from transaction.
+    /// The callback solved the problem or just waited for a while, libmdbx
+    /// should rescan the reader lock table and retry. This also includes a
+    /// situation when corresponding transaction terminated in normal way by
+    /// `mdbx_txn_abort()` or `mdbx_txn_reset()`, and may be restarted. I.e.
+    /// reader slot isn't needed to be cleaned from transaction.
     Success = 0,
-    /// Transaction aborted asynchronous and reader slot should be cleared immediately, i.e. read
-    /// transaction will not continue but `mdbx_txn_abort()` nor `mdbx_txn_reset()` will be called
-    /// later.
+    /// Transaction aborted asynchronous and reader slot should be cleared
+    /// immediately, i.e. read transaction will not continue but
+    /// `mdbx_txn_abort()` nor `mdbx_txn_reset()` will be called later.
     ClearReaderSlot = 1,
-    /// The reader process was terminated or killed, and MDBX should entirely reset reader
-    /// registration.
+    /// The reader process was terminated or killed, and MDBX should entirely
+    /// reset reader registration.
     ReaderProcessTerminated = 2,
 }
 
@@ -597,8 +623,9 @@ pub struct EnvironmentBuilder {
     kind: EnvironmentKind,
     handle_slow_readers: Option<HandleSlowReadersCallback>,
     #[cfg(feature = "read-tx-timeouts")]
-    /// The maximum duration of a read transaction. If [None], but the `read-tx-timeout` feature is
-    /// enabled, the default value of [`DEFAULT_MAX_READ_TRANSACTION_DURATION`] is used.
+    /// The maximum duration of a read transaction. If [None], but the
+    /// `read-tx-timeout` feature is enabled, the default value of
+    /// [`DEFAULT_MAX_READ_TRANSACTION_DURATION`] is used.
     max_read_transaction_duration: Option<read_transactions::MaxReadTransactionDuration>,
 }
 
@@ -812,31 +839,37 @@ impl EnvironmentBuilder {
         self
     }
 
+    /// Sets the relative limit of the reader's page-table augmentation.
     pub const fn set_rp_augment_limit(&mut self, v: u64) -> &mut Self {
         self.rp_augment_limit = Some(v);
         self
     }
 
+    /// Sets the relative loose limit of the environment.
     pub const fn set_loose_limit(&mut self, v: u64) -> &mut Self {
         self.loose_limit = Some(v);
         self
     }
 
+    /// Sets the relative dirty-page reserve limit of the environment.
     pub const fn set_dp_reserve_limit(&mut self, v: u64) -> &mut Self {
         self.dp_reserve_limit = Some(v);
         self
     }
 
+    /// Sets the relative dirty-page limit per transaction.
     pub const fn set_txn_dp_limit(&mut self, v: u64) -> &mut Self {
         self.txn_dp_limit = Some(v);
         self
     }
 
+    /// Sets the spill maximum denominator.
     pub fn set_spill_max_denominator(&mut self, v: u8) -> &mut Self {
         self.spill_max_denominator = Some(v.into());
         self
     }
 
+    /// Sets the spill minimum denominator.
     pub fn set_spill_min_denominator(&mut self, v: u8) -> &mut Self {
         self.spill_min_denominator = Some(v.into());
         self
@@ -860,6 +893,7 @@ impl EnvironmentBuilder {
         self
     }
 
+    /// Set the logging level for the environment.
     pub const fn set_log_level(&mut self, log_level: ffi::MDBX_log_level_t) -> &mut Self {
         self.log_level = Some(log_level);
         self
@@ -890,6 +924,7 @@ pub(crate) mod read_transactions {
 
     #[cfg(feature = "read-tx-timeouts")]
     impl MaxReadTransactionDuration {
+        /// Returns the duration if set, otherwise None for unbounded.
         pub const fn as_duration(&self) -> Option<Duration> {
             match self {
                 Self::Unbounded => None,

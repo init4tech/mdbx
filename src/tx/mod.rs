@@ -4,7 +4,6 @@ pub use cursor::Cursor;
 mod database;
 pub use database::Database;
 
-/// Iterator utilities for cursors.
 pub mod iter;
 
 mod transaction;

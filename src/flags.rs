@@ -221,7 +221,8 @@ impl EnvironmentFlags {
 
 bitflags! {
     #[doc="Database options."]
-    #[derive(Default, Clone, Copy)]
+    #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+    #[repr(transparent)]
     pub struct DatabaseFlags: MDBX_env_flags_t {
         /// Use reverse string comparison for keys.
         const REVERSE_KEY = MDBX_REVERSEKEY;
@@ -254,7 +255,8 @@ bitflags! {
 
 bitflags! {
     #[doc="Write options."]
-    #[derive(Default, Clone, Copy)]
+    #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+    #[repr(transparent)]
     pub struct WriteFlags: MDBX_env_flags_t {
         /// Upsertion by default (without any other flags)
         const UPSERT = MDBX_UPSERT;

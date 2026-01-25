@@ -16,13 +16,7 @@ use std::{borrow::Cow, slice};
 /// - `()` - Ignores data entirely
 /// - [`ObjectLength`] - Returns only the length
 pub trait TableObjectOwned: for<'de> TableObject<'de> {
-    /// Decodes the object from the given bytes.
-    ///
-    /// This is the primary method to implement. Return a [`ReadError`] if
-    /// the data cannot be decoded (e.g., wrong length, invalid format).
-    ///
-    /// If you need to borrow data directly from the database for zero-copy
-    /// deserialization, also implement [`decode_borrow`](Self::decode_borrow).
+    /// Decodes the object from the given bytes, without borrowing them.
     ///
     /// [`ReadError`]: crate::ReadError
     fn decode(data_val: &[u8]) -> ReadResult<Self> {
@@ -40,35 +34,45 @@ impl<T> TableObjectOwned for T where T: for<'de> TableObject<'de> {}
 ///
 /// # Implementation Guide
 ///
-/// For most types, only implement [`decode`](Self::decode). The default
-/// implementation of [`decode_val`](Self::decode_val) will call `decode`
-/// with the raw ffi bytes, and is easy to misuse.
+/// For most types, only implement [`decode_borrow`](Self::decode_borrow). The
+/// default implementation of [`decode_val`](Self::decode_val) will call
+/// `decode_borrow` with the raw ffi bytes, and is easy to misuse.
 ///
-/// # Zero-copy Deserialization
+/// ## Zero-copy Deserialization
 ///
 /// MDBX supports zero-copy deserialization for types that can borrow data
 /// directly from the database (like `Cow<'a, [u8]>`). Read-only transactions
-/// ALWAYS support borrowing, while read-write transactions require checking
-/// if the data is "dirty" (modified but not yet committed) first.
+/// ALWAYS support borrowing, while read-write transactions require a check
+/// to see if the data is "dirty" (modified but not yet committed). If the page
+/// containing the data is dirty, a copy must be made before borrowing.
 ///
-/// The `Cow<'a, [u8]>` implementation already borrows data directly from the
-/// database when possible, and falls back to copying when necessary. If you
-/// need similar behavior for your own types, we recommend wrapping a
-/// `Cow<'a, [u8]>`.
-///
-/// To take advantage of zero-copy deserialization, you MUST implement
-/// [`decode_borrow`](Self::decode_borrow) to handle the `Cow` case. The default
+/// [`TableObject::decode_borrow`] is the main method to implement. It receives
+/// a `Cow<'a, [u8]>` which may be either borrowed or owned data, depending on
+/// the transaction type and data state. Implementations may choose to split
+/// the data further, copy it, or use it as-is.
 ///
 /// ```
 /// # use std::borrow::Cow;
 /// use signet_libmdbx::{TableObject, ReadResult, MdbxError};
 ///
-/// struct MyZeroCopy<'a> (Cow<'a, [u8]>);
+/// // A zero-copy wrapper around a u32 stored in little-endian format.
+/// struct MyZeroCopyU32<'a> (Cow<'a, [u8]>);
 ///
-/// impl<'a> TableObject<'a> for MyZeroCopy<'a> {
+/// impl<'a> TableObject<'a> for MyZeroCopyU32<'a> {
 ///     fn decode_borrow(data: Cow<'a, [u8]>) -> ReadResult<Self> {
-///        Ok(MyZeroCopy(data))
+///        if data.len() < 4 {
+///            return Err(MdbxError::DecodeErrorLenDiff.into());
+///        }
+///        Ok(MyZeroCopyU32(data))
 ///     }
+/// }
+///
+/// impl MyZeroCopyU32<'_> {
+///    /// Reads a u32 from the start of the data.
+///    pub fn read_u32(&self) -> u32 {
+///        let bytes = &self.0[..4];
+///        u32::from_le_bytes(bytes.try_into().unwrap())
+///    }
 /// }
 /// ```
 ///

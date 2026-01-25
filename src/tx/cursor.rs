@@ -165,8 +165,10 @@ where
     where
         Value: TableObject<'tx>,
     {
-        let (_, v, _) = codec_try_optional!(self.get::<(), Value>(key, data, op));
-
+        let (_, v, result_true) = codec_try_optional!(self.get::<(), Value>(key, data, op));
+        if result_true {
+            return Ok(None);
+        }
         Ok(Some(v))
     }
 
@@ -180,8 +182,10 @@ where
         Key: TableObject<'tx>,
         Value: TableObject<'tx>,
     {
-        let (k, v, _) = codec_try_optional!(self.get(key, data, op));
-
+        let (k, v, result_true) = codec_try_optional!(self.get(key, data, op));
+        if result_true {
+            return Ok(None);
+        }
         Ok(Some((k.unwrap(), v)))
     }
 

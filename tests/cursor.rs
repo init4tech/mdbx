@@ -455,12 +455,12 @@ fn test_dup_sort_methods_work_on_dupsort_db() {
     cursor.first::<(), ()>().unwrap();
 
     // These should work without error on a DUPSORT database
-    assert!(cursor.first_dup::<()>().is_ok());
-    assert!(cursor.last_dup::<()>().is_ok());
-    assert!(cursor.next_dup::<(), ()>().is_ok());
-    assert!(cursor.prev_dup::<(), ()>().is_ok());
-    assert!(cursor.get_both::<()>(b"key1", b"val1").is_ok());
-    assert!(cursor.get_both_range::<()>(b"key1", b"val").is_ok());
+    cursor.first_dup::<()>().unwrap();
+    cursor.last_dup::<()>().unwrap();
+    cursor.next_dup::<(), ()>().unwrap();
+    cursor.prev_dup::<(), ()>().unwrap();
+    cursor.get_both::<()>(b"key1", b"val1").unwrap();
+    cursor.get_both_range::<()>(b"key1", b"val").unwrap();
 }
 
 #[test]
@@ -477,8 +477,8 @@ fn test_dup_fixed_methods_work_on_dupfixed_db() {
     cursor.first::<(), ()>().unwrap();
 
     // These should work without error on a DUPFIXED database
-    assert!(cursor.get_multiple::<()>().is_ok());
+    cursor.get_multiple::<()>().unwrap();
     // next_multiple and prev_multiple may return None but shouldn't error
-    assert!(cursor.next_multiple::<(), ()>().is_ok());
-    assert!(cursor.prev_multiple::<(), ()>().is_ok());
+    cursor.next_multiple::<(), ()>().unwrap();
+    cursor.prev_multiple::<(), ()>().unwrap();
 }

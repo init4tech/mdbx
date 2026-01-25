@@ -11,10 +11,10 @@ fn test_open() {
     assert!(Environment::builder().set_flags(Mode::ReadOnly.into()).open(dir.path()).is_err());
 
     // opening non-existent env should succeed
-    assert!(Environment::builder().open(dir.path()).is_ok());
+    Environment::builder().open(dir.path()).unwrap();
 
     // opening env with read-only should succeed
-    assert!(Environment::builder().set_flags(Mode::ReadOnly.into()).open(dir.path()).is_ok());
+    Environment::builder().set_flags(Mode::ReadOnly.into()).open(dir.path()).unwrap();
 }
 
 #[test]
@@ -25,16 +25,16 @@ fn test_begin_txn() {
         // writable environment
         let env = Environment::builder().open(dir.path()).unwrap();
 
-        assert!(env.begin_rw_txn().is_ok());
-        assert!(env.begin_ro_txn().is_ok());
+        env.begin_rw_txn().unwrap();
+        env.begin_ro_txn().unwrap();
     }
 
     {
         // read-only environment
         let env = Environment::builder().set_flags(Mode::ReadOnly.into()).open(dir.path()).unwrap();
 
-        assert!(env.begin_rw_txn().is_err());
-        assert!(env.begin_ro_txn().is_ok());
+        env.begin_rw_txn().unwrap_err();
+        env.begin_ro_txn().unwrap();
     }
 }
 
@@ -44,8 +44,8 @@ fn test_open_db() {
     let env = Environment::builder().set_max_dbs(1).open(dir.path()).unwrap();
 
     let txn = env.begin_ro_txn().unwrap();
-    assert!(txn.open_db(None).is_ok());
-    assert!(txn.open_db(Some("testdb")).is_err());
+    txn.open_db(None).unwrap();
+    txn.open_db(Some("testdb")).unwrap_err();
 }
 
 #[test]
@@ -54,9 +54,9 @@ fn test_create_db() {
     let env = Environment::builder().set_max_dbs(11).open(dir.path()).unwrap();
 
     let txn = env.begin_rw_txn().unwrap();
-    assert!(txn.open_db(Some("testdb")).is_err());
-    assert!(txn.create_db(Some("testdb"), DatabaseFlags::empty()).is_ok());
-    assert!(txn.open_db(Some("testdb")).is_ok())
+    txn.open_db(Some("testdb")).unwrap_err();
+    txn.create_db(Some("testdb"), DatabaseFlags::empty()).unwrap();
+    txn.open_db(Some("testdb")).unwrap();
 }
 
 #[test]

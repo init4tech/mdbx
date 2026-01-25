@@ -31,7 +31,7 @@ debug = false
 incremental = false
 
 [dependencies]
-signet-mdbx-sys= { version = "0.0.1", path = "mdbx-sys" }
+signet-mdbx-sys= { version = "0.1.0", path = "mdbx-sys" }
 
 bitflags = "2.10.0"
 byteorder = "1.5.0"

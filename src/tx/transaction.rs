@@ -5,10 +5,12 @@ use crate::{
     sys::txn_manager::{TxnManagerMessage, TxnPtr},
 };
 use ffi::{MDBX_TXN_RDONLY, MDBX_TXN_READWRITE, MDBX_txn_flags_t};
-use parking_lot::{Mutex, MutexGuard};
+use parking_lot::{Mutex, MutexGuard, RwLock};
+use smallvec::SmallVec;
 use std::{
-    ffi::{c_uint, c_void},
+    ffi::{CStr, c_uint, c_void},
     fmt::{self, Debug},
+    hash::{Hash, Hasher},
     mem::size_of,
     ptr, slice,
     sync::{Arc, atomic::AtomicBool, mpsc::sync_channel},
@@ -53,6 +55,83 @@ impl TransactionKind for RW {
     const IS_READ_ONLY: bool = false;
 }
 
+/// Cached database entry.
+///
+/// Uses hash-only comparison since 64-bit hash collisions are negligible
+/// for practical database counts.
+#[derive(Debug, Clone, Copy)]
+struct CachedDb {
+    /// Hash of database name (None hashes distinctly from any string).
+    name_hash: u64,
+    /// The cached database (dbi + flags).
+    db: Database,
+}
+
+impl From<CachedDb> for Database {
+    fn from(value: CachedDb) -> Self {
+        value.db
+    }
+}
+
+/// Simple cache container for database handles.
+///
+/// Uses inline storage for the common case (most apps use < 16 databases).
+#[derive(Debug)]
+struct DbCache {
+    entries: RwLock<SmallVec<[CachedDb; 16]>>,
+}
+
+impl DbCache {
+    /// Creates a new empty cache.
+    fn new() -> Self {
+        Self { entries: RwLock::new(SmallVec::new()) }
+    }
+
+    /// Returns a read guard to the cache entries.
+    fn read(&self) -> parking_lot::RwLockReadGuard<'_, SmallVec<[CachedDb; 16]>> {
+        self.entries.read()
+    }
+
+    /// Returns a write guard to the cache entries.
+    fn write(&self) -> parking_lot::RwLockWriteGuard<'_, SmallVec<[CachedDb; 16]>> {
+        self.entries.write()
+    }
+
+    /// Read a database entry from the cache.
+    fn read_db(&self, name_hash: u64) -> Option<Database> {
+        let entries = self.read();
+        for entry in entries.iter() {
+            if entry.name_hash == name_hash {
+                return Some(entry.db);
+            }
+        }
+        None
+    }
+
+    /// Write a database entry to the cache.
+    fn write_db(&self, db: CachedDb) {
+        let mut entries = self.write();
+        for entry in entries.iter() {
+            if entry.name_hash == db.name_hash {
+                return; // Another thread beat us
+            }
+        }
+        entries.push(db);
+    }
+
+    /// Remove a database entry from the cache by dbi.
+    fn remove_dbi(&self, dbi: ffi::MDBX_dbi) {
+        let mut entries = self.write();
+        entries.retain(|entry| entry.db.dbi() != dbi);
+    }
+}
+
+impl Default for DbCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// An MDBX transaction.
 ///
 /// All database operations require a transaction.
@@ -93,6 +172,7 @@ where
             txn,
             committed: AtomicBool::new(false),
             env,
+            db_cache: DbCache::default(),
             _marker: Default::default(),
         };
 
@@ -201,19 +281,93 @@ where
         }
     }
 
-    /// Opens a handle to an MDBX database.
+    /// Opens a handle to an MDBX database, and cache the handle for re-use.
     ///
-    /// If `name` is [None], then the returned handle will be for the default database.
+    /// If `name` is `None`, then the returned handle will be for the default
+    /// database.
     ///
-    /// If `name` is not [None], then the returned handle will be for a named database. In this
-    /// case the environment must be configured to allow named databases through
+    /// If `name` is not `None`, then the returned handle will be for a named
+    /// database. In this case the environment must be configured to allow
+    /// named databases through
     /// [`EnvironmentBuilder::set_max_dbs()`](crate::EnvironmentBuilder::set_max_dbs).
     ///
-    /// The returned database handle may be shared among any transaction in the environment.
+    /// The returned database handle MAY be shared among any transaction in the
+    /// environment. However, if the tx is RW and the DB is created within the
+    /// tx, the DB will not be visible to other transactions until the tx is
+    /// committed.
     ///
-    /// The database name may not contain the null character.
+    /// The database name MAY NOT contain the null character.
     pub fn open_db(&self, name: Option<&str>) -> MdbxResult<Database> {
-        Database::new(self, name, 0)
+        let name_hash = Self::hash_name(name);
+
+        if let Some(db) = self.inner.db_cache.read_db(name_hash) {
+            return Ok(db);
+        }
+
+        self.open_and_cache_with_flags(name, DatabaseFlags::empty()).map(Into::into)
+    }
+
+    /// Open a DB handle without checking or writing to the cache.
+    ///
+    /// This may be useful when the transaction intends to open many (>20)
+    /// tables, as cache performance will degrade slightly with size.
+    pub fn open_db_no_cache(&self, name: Option<&str>) -> MdbxResult<Database> {
+        self.open_db_with_flags(name, DatabaseFlags::empty()).map(Into::into)
+    }
+
+    /// Raw open (don't check cache) with flags. Write to cache after opening.
+    fn open_and_cache_with_flags(
+        &self,
+        name: Option<&str>,
+        flags: DatabaseFlags,
+    ) -> Result<CachedDb, MdbxError> {
+        // Slow path: open via FFI and cache
+        let db = self.open_db_with_flags(name, flags)?;
+
+        // Double-check pattern to avoid duplicate entries
+        self.inner.db_cache.write_db(db);
+
+        Ok(db)
+    }
+
+    /// Raw open (don't check cache) with flags.
+    ///
+    /// Return the name hash along with the database.
+    fn open_db_with_flags(&self, name: Option<&str>, flags: DatabaseFlags) -> MdbxResult<CachedDb> {
+        let mut c_name_buf = SmallVec::<[u8; 32]>::new();
+        let c_name = name.map(|n| {
+            c_name_buf.extend_from_slice(n.as_bytes());
+            c_name_buf.push(0);
+            CStr::from_bytes_with_nul(&c_name_buf).unwrap()
+        });
+        let name_ptr = c_name.as_ref().map_or(ptr::null(), |s| s.as_ptr());
+
+        // Single txn_execute: open dbi AND read flags
+        let db = self.txn_execute(|txn_ptr| {
+            let mut dbi: ffi::MDBX_dbi = 0;
+            mdbx_result(unsafe { ffi::mdbx_dbi_open(txn_ptr, name_ptr, flags.bits(), &mut dbi) })?;
+
+            // Read actual flags (may differ from requested due to ACCEDE)
+            let mut actual_flags: c_uint = 0;
+            let mut _status: c_uint = 0;
+            mdbx_result(unsafe {
+                ffi::mdbx_dbi_flags_ex(txn_ptr, dbi, &mut actual_flags, &mut _status)
+            })?;
+
+            // The types are not the same on Windows. Great!
+            #[cfg_attr(not(windows), allow(clippy::useless_conversion))]
+            let db_flags = DatabaseFlags::from_bits_truncate(actual_flags.try_into().unwrap());
+
+            Ok(Database::new(dbi, db_flags))
+        })??;
+        Ok(CachedDb { name_hash: Self::hash_name(name), db })
+    }
+
+    #[inline]
+    fn hash_name(name: Option<&str>) -> u64 {
+        let mut hasher = std::hash::DefaultHasher::new();
+        name.hash(&mut hasher);
+        hasher.finish()
     }
 
     /// Gets the option flags for the given database in the transaction.
@@ -300,6 +454,9 @@ where
     /// Hold open the environment.
     env: Environment,
 
+    /// Cache of opened database handles.
+    db_cache: DbCache,
+
     _marker: std::marker::PhantomData<fn() -> K>,
 }
 
@@ -364,10 +521,6 @@ where
 }
 
 impl Transaction<RW> {
-    fn open_db_with_flags(&self, name: Option<&str>, flags: DatabaseFlags) -> MdbxResult<Database> {
-        Database::new(self, name, flags.bits())
-    }
-
     /// Opens a handle to an MDBX database, creating the database if necessary.
     ///
     /// If the database is already created, the given option flags will be
@@ -385,7 +538,7 @@ impl Transaction<RW> {
     ///
     /// [`EnvironmentBuilder::set_max_dbs()`]: crate::EnvironmentBuilder::set_max_dbs
     pub fn create_db(&self, name: Option<&str>, flags: DatabaseFlags) -> MdbxResult<Database> {
-        self.open_db_with_flags(name, flags | DatabaseFlags::CREATE)
+        self.open_db_with_flags(name, flags | DatabaseFlags::CREATE).map(|db| db.db)
     }
 
     /// Stores an item into a database.
@@ -467,9 +620,10 @@ impl Transaction<RW> {
     /// Delete items from a database.
     /// This function removes key/data pairs from the database.
     ///
-    /// The data parameter is NOT ignored regardless the database does support sorted duplicate data
-    /// items or not. If the data parameter is [Some] only the matching data item will be
-    /// deleted. Otherwise, if data parameter is [None], any/all value(s) for specified key will
+    /// The data parameter is NOT ignored regardless the database does support
+    /// sorted duplicate data items or not. If the data parameter is [Some]
+    /// only the matching data item will be deleted. Otherwise, if data
+    /// parameter is [None], any/all value(s) for specified key will
     /// be deleted.
     ///
     /// Returns `true` if the key/value pair was present.
@@ -513,6 +667,8 @@ impl Transaction<RW> {
     pub unsafe fn drop_db(&self, dbi: ffi::MDBX_dbi) -> MdbxResult<()> {
         mdbx_result(self.txn_execute(|txn| unsafe { ffi::mdbx_drop(txn, dbi, true) })?)?;
 
+        self.inner.db_cache.remove_dbi(dbi);
+
         Ok(())
     }
 }
@@ -525,6 +681,8 @@ impl Transaction<RO> {
     /// BEFORE calling this function.
     pub unsafe fn close_db(&self, dbi: ffi::MDBX_dbi) -> MdbxResult<()> {
         mdbx_result(unsafe { ffi::mdbx_dbi_close(self.env().env_ptr(), dbi) })?;
+
+        self.inner.db_cache.remove_dbi(dbi);
 
         Ok(())
     }
@@ -733,6 +891,7 @@ unsafe impl Sync for TransactionPtr {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     const fn assert_send_sync<T: Send + Sync>() {}
 
@@ -740,5 +899,94 @@ mod tests {
     const fn test_txn_send_sync() {
         assert_send_sync::<Transaction<RO>>();
         assert_send_sync::<Transaction<RW>>();
+    }
+
+    #[test]
+    fn test_db_cache_returns_same_db() {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+        let txn = env.begin_ro_txn().unwrap();
+
+        let db1 = txn.open_db(None).unwrap();
+        let db2 = txn.open_db(None).unwrap();
+
+        assert_eq!(db1.dbi(), db2.dbi());
+        assert_eq!(db1.flags(), db2.flags());
+    }
+
+    #[test]
+    fn test_db_cache_no_cache_still_works() {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+        let txn = env.begin_ro_txn().unwrap();
+
+        let db1 = txn.open_db_no_cache(None).unwrap();
+        let db2 = txn.open_db_no_cache(None).unwrap();
+
+        // Same DBI should be returned by MDBX
+        assert_eq!(db1.dbi(), db2.dbi());
+    }
+
+    #[test]
+    fn test_db_cache_cached_matches_uncached() {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+        let txn = env.begin_ro_txn().unwrap();
+
+        let cached = txn.open_db(None).unwrap();
+        let uncached = txn.open_db_no_cache(None).unwrap();
+
+        assert_eq!(cached.dbi(), uncached.dbi());
+        assert_eq!(cached.flags(), uncached.flags());
+    }
+
+    #[test]
+    fn test_db_cache_multiple_named_dbs() {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().set_max_dbs(10).open(dir.path()).unwrap();
+
+        // Create named DBs
+        {
+            let txn = env.begin_rw_txn().unwrap();
+            txn.create_db(Some("db1"), DatabaseFlags::empty()).unwrap();
+            txn.create_db(Some("db2"), DatabaseFlags::empty()).unwrap();
+            txn.commit().unwrap();
+        }
+
+        let txn = env.begin_ro_txn().unwrap();
+
+        let db1_a = txn.open_db(Some("db1")).unwrap();
+        let db2_a = txn.open_db(Some("db2")).unwrap();
+        let db1_b = txn.open_db(Some("db1")).unwrap();
+        let db2_b = txn.open_db(Some("db2")).unwrap();
+
+        // Same named DB returns same handle
+        assert_eq!(db1_a.dbi(), db1_b.dbi());
+        assert_eq!(db2_a.dbi(), db2_b.dbi());
+
+        // Different DBs have different handles
+        assert_ne!(db1_a.dbi(), db2_a.dbi());
+    }
+
+    #[test]
+    fn test_db_cache_flags_preserved() {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().set_max_dbs(10).open(dir.path()).unwrap();
+
+        // Create DB with specific flags
+        {
+            let txn = env.begin_rw_txn().unwrap();
+            txn.create_db(Some("dupsort"), DatabaseFlags::DUP_SORT).unwrap();
+            txn.commit().unwrap();
+        }
+
+        let txn = env.begin_ro_txn().unwrap();
+        let db = txn.open_db(Some("dupsort")).unwrap();
+
+        assert!(db.flags().contains(DatabaseFlags::DUP_SORT));
+
+        // Second open should have same flags from cache
+        let db2 = txn.open_db(Some("dupsort")).unwrap();
+        assert!(db2.flags().contains(DatabaseFlags::DUP_SORT));
     }
 }

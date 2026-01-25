@@ -380,3 +380,74 @@ fn test_stat_dupsort() {
         assert_eq!(stat.entries(), 8);
     }
 }
+
+#[test]
+fn test_open_db_cached_returns_same_handle() {
+    let dir = tempdir().unwrap();
+    let env = Environment::builder().set_max_dbs(2).open(dir.path()).unwrap();
+
+    let txn = env.begin_rw_txn().unwrap();
+    txn.create_db(Some("test"), DatabaseFlags::empty()).unwrap();
+    txn.commit().unwrap();
+
+    // Test that open_db_cached returns the same dbi for the same name
+    let txn = env.begin_ro_txn().unwrap();
+
+    let db1 = txn.open_db(None).unwrap();
+    let db2 = txn.open_db(None).unwrap();
+    assert_eq!(db1.dbi(), db2.dbi());
+
+    let db3 = txn.open_db(Some("test")).unwrap();
+    let db4 = txn.open_db(Some("test")).unwrap();
+    assert_eq!(db3.dbi(), db4.dbi());
+
+    // Different names should have different dbis
+    assert_ne!(db1.dbi(), db3.dbi());
+}
+
+#[test]
+fn test_database_flags_getter() {
+    let dir = tempdir().unwrap();
+    let env = Environment::builder().set_max_dbs(2).open(dir.path()).unwrap();
+
+    let txn = env.begin_rw_txn().unwrap();
+
+    // Create a database with DUP_SORT flag
+    let db = txn.create_db(Some("dupsort"), DatabaseFlags::DUP_SORT).unwrap();
+    assert!(db.flags().contains(DatabaseFlags::DUP_SORT));
+
+    // Create a database without special flags
+    let db_default = txn.create_db(Some("default"), DatabaseFlags::empty()).unwrap();
+    assert!(!db_default.flags().contains(DatabaseFlags::DUP_SORT));
+
+    txn.commit().unwrap();
+
+    // Verify flags persist after reopening
+    let txn = env.begin_ro_txn().unwrap();
+    let db = txn.open_db(Some("dupsort")).unwrap();
+    assert!(db.flags().contains(DatabaseFlags::DUP_SORT));
+}
+
+#[test]
+fn test_cached_db_has_correct_flags() {
+    let dir = tempdir().unwrap();
+    let env = Environment::builder().set_max_dbs(2).open(dir.path()).unwrap();
+
+    let txn = env.begin_rw_txn().unwrap();
+    txn.create_db(Some("dupsort"), DatabaseFlags::DUP_SORT).unwrap();
+    txn.commit().unwrap();
+
+    // Test that cached open returns correct flags
+    let txn = env.begin_ro_txn().unwrap();
+
+    // First open - cache miss, goes through FFI
+    let db1 = txn.open_db(Some("dupsort")).unwrap();
+    assert!(db1.flags().contains(DatabaseFlags::DUP_SORT));
+
+    // Second open - cache hit
+    let db2 = txn.open_db(Some("dupsort")).unwrap();
+    assert!(db2.flags().contains(DatabaseFlags::DUP_SORT));
+
+    // Verify they return the same handle
+    assert_eq!(db1.dbi(), db2.dbi());
+}

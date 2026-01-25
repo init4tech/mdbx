@@ -57,5 +57,9 @@ name = "cursor"
 harness = false
 
 [[bench]]
+name = "db_open"
+harness = false
+
+[[bench]]
 name = "transaction"
 harness = false

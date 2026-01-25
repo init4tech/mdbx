@@ -8,8 +8,8 @@ use crate::{
 use ffi::{
     MDBX_FIRST, MDBX_FIRST_DUP, MDBX_GET_BOTH, MDBX_GET_BOTH_RANGE, MDBX_GET_CURRENT,
     MDBX_GET_MULTIPLE, MDBX_LAST, MDBX_LAST_DUP, MDBX_NEXT, MDBX_NEXT_DUP, MDBX_NEXT_MULTIPLE,
-    MDBX_NEXT_NODUP, MDBX_PREV, MDBX_PREV_DUP, MDBX_PREV_MULTIPLE, MDBX_PREV_NODUP, MDBX_SET,
-    MDBX_SET_KEY, MDBX_SET_LOWERBOUND, MDBX_SET_RANGE, MDBX_cursor_op,
+    MDBX_NEXT_NODUP, MDBX_PREV, MDBX_PREV_DUP, MDBX_PREV_MULTIPLE, MDBX_PREV_NODUP,
+    MDBX_RESULT_TRUE, MDBX_SET, MDBX_SET_KEY, MDBX_SET_LOWERBOUND, MDBX_SET_RANGE, MDBX_cursor_op,
 };
 use std::{ffi::c_void, fmt, ptr};
 
@@ -194,6 +194,8 @@ where
         Value: TableObject<'tx>,
     {
         let (k, v, result_true) = codec_try_optional!(self.get(key, data, op));
+        dbg!(result_true);
+        dbg!(MDBX_RESULT_TRUE);
         if result_true {
             return Ok(None);
         }

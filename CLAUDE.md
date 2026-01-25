@@ -1,5 +1,8 @@
 # mdbx Crate Notes
 
+Include updates to the notes here if you discover important details while
+working, or if the notes become outdated.
+
 ## Crate Overview
 
 Rust bindings for libmdbx (MDBX database). Crate name: `signet-libmdbx`.

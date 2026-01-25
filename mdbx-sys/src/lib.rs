@@ -7,13 +7,18 @@
 )]
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 #![allow(non_upper_case_globals, non_camel_case_types, non_snake_case, clippy::all)]
-#![cfg_attr(docsrs, feature(doc_cfg))]
 
-#[cfg(feature = "bindgen")]
-include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+#[cfg(target_os = "linux")]
+mod bindings_linux;
+#[cfg(target_os = "linux")]
+pub use bindings_linux::*;
 
-#[cfg(not(feature = "bindgen"))]
-mod bindings;
+#[cfg(target_os = "windows")]
+mod bindings_windows;
+#[cfg(target_os = "windows")]
+pub use bindings_windows::*;
 
-#[cfg(not(feature = "bindgen"))]
-pub use bindings::*;
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+mod bindings_macos;
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+pub use bindings_macos::*;

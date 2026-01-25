@@ -46,7 +46,7 @@
 //! # let env = Environment::builder().open(Path::new("/tmp/iter_example")).unwrap();
 //! let txn = env.begin_ro_txn().unwrap();
 //! let db = txn.open_db(None).unwrap();
-//! let mut cursor = txn.cursor(&db).unwrap();
+//! let mut cursor = txn.cursor(db).unwrap();
 //!
 //! // Iterate using the standard Iterator trait (owned)
 //! for result in cursor.iter_start::<Vec<u8>, Vec<u8>>().unwrap() {

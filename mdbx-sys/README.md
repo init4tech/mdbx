@@ -43,7 +43,7 @@ Install bindgen-cli and run directly:
 # Install bindgen-cli if not already installed
 cargo install bindgen-cli
 
-# Generate bindings for
+# Generate bindings for your platform
 bindgen libmdbx/mdbx.h \
   --allowlist-var "^(MDBX|mdbx)_.*" \
   --allowlist-type "^(MDBX|mdbx)_.*" \

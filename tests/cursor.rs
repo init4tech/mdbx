@@ -1,6 +1,6 @@
 #![allow(missing_docs)]
 use signet_libmdbx::*;
-use std::borrow::Cow;
+use std::{borrow::Cow, hint::black_box};
 use tempfile::tempdir;
 
 /// Convenience
@@ -455,12 +455,12 @@ fn test_dup_sort_methods_work_on_dupsort_db() {
     cursor.first::<(), ()>().unwrap();
 
     // These should work without error on a DUPSORT database
-    assert!(cursor.first_dup::<()>().is_ok());
-    assert!(cursor.last_dup::<()>().is_ok());
-    assert!(cursor.next_dup::<(), ()>().is_ok());
-    assert!(cursor.prev_dup::<(), ()>().is_ok());
-    assert!(cursor.get_both::<()>(b"key1", b"val1").is_ok());
-    assert!(cursor.get_both_range::<()>(b"key1", b"val").is_ok());
+    cursor.first_dup::<()>().unwrap();
+    cursor.last_dup::<()>().unwrap();
+    cursor.next_dup::<(), ()>().unwrap();
+    cursor.prev_dup::<(), ()>().unwrap();
+    cursor.get_both::<()>(b"key1", b"val1").unwrap();
+    cursor.get_both_range::<()>(b"key1", b"val").unwrap();
 }
 
 #[test]
@@ -477,8 +477,94 @@ fn test_dup_fixed_methods_work_on_dupfixed_db() {
     cursor.first::<(), ()>().unwrap();
 
     // These should work without error on a DUPFIXED database
-    assert!(cursor.get_multiple::<()>().is_ok());
+    cursor.get_multiple::<()>().unwrap();
     // next_multiple and prev_multiple may return None but shouldn't error
-    assert!(cursor.next_multiple::<(), ()>().is_ok());
-    assert!(cursor.prev_multiple::<(), ()>().is_ok());
+    cursor.next_multiple::<(), ()>().unwrap();
+    cursor.prev_multiple::<(), ()>().unwrap();
+}
+
+#[test]
+fn test_iter_exhausted_cursor_repositions() {
+    let dir = tempdir().unwrap();
+    let env = Environment::builder().open(dir.path()).unwrap();
+
+    let txn = env.begin_rw_txn().unwrap();
+    let db = txn.open_db(None).unwrap();
+    for i in 0u8..100 {
+        txn.put(db.dbi(), [i], [i], WriteFlags::empty()).unwrap();
+    }
+    txn.commit().unwrap();
+
+    let txn = env.begin_ro_txn().unwrap();
+    let db = txn.open_db(None).unwrap();
+    let mut cursor = txn.cursor(db).unwrap();
+
+    // Loop 1: iterate through all items
+    let count1 = cursor.iter::<[u8; 1], [u8; 1]>().count();
+    assert_eq!(count1, 100);
+
+    // After exhaustion, is_eof should be true
+    assert!(cursor.is_eof());
+
+    // Loop 2: iter() should reposition and iterate all items again
+    let count2 = cursor.iter::<[u8; 1], [u8; 1]>().count();
+    assert_eq!(count2, 100);
+
+    // Total count should be 200
+    assert_eq!(count1 + count2, 200);
+}
+
+#[test]
+fn test_iter_benchmark_pattern() {
+    // This test mirrors the exact logic of bench_get_seq_iter
+    let dir = tempdir().unwrap();
+    let env = Environment::builder().open(dir.path()).unwrap();
+
+    let n = 100u32;
+
+    let txn = env.begin_rw_txn().unwrap();
+    let db = txn.open_db(None).unwrap();
+    for i in 0..n {
+        let key = format!("key{i}");
+        let data = format!("data{i}");
+        txn.put(db.dbi(), key.as_bytes(), data.as_bytes(), WriteFlags::empty()).unwrap();
+    }
+    txn.commit().unwrap();
+
+    // Setup like benchmark: transaction and db outside the "iteration"
+    let txn = env.begin_ro_txn().unwrap();
+    let db = txn.open_db(None).unwrap();
+
+    // Run the benchmark closure multiple times to match criterion behavior
+    for _ in 0..3 {
+        let mut cursor = txn.cursor(db).unwrap();
+        let mut count = 0u32;
+
+        // Loop 1: iterate with map(Result::unwrap), using ObjectLength like benchmark
+        for (key_len, data_len) in cursor.iter::<ObjectLength, ObjectLength>().map(Result::unwrap) {
+            black_box(*key_len + *data_len);
+            count += 1;
+        }
+
+        // Loop 2: iterate with filter_map(Result::ok)
+        for (key_len, data_len) in
+            cursor.iter::<ObjectLength, ObjectLength>().filter_map(Result::ok)
+        {
+            black_box(*key_len + *data_len);
+            count += 1;
+        }
+
+        // Loop 3: internal iterate function (doesn't affect count)
+        fn iterate(cursor: &mut Cursor<signet_libmdbx::RO>) -> ReadResult<()> {
+            for result in cursor.iter::<ObjectLength, ObjectLength>() {
+                let (key_len, data_len) = result?;
+                black_box(*key_len + *data_len);
+            }
+            Ok(())
+        }
+        iterate(&mut cursor).unwrap();
+
+        // With the fix, both loops should iterate all items
+        assert_eq!(count, n * 2);
+    }
 }

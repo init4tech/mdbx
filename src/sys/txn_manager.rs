@@ -417,7 +417,7 @@ mod read_transactions {
 
             let tx = env.begin_ro_txn().unwrap();
             sleep(READ_TRANSACTIONS_CHECK_INTERVAL);
-            assert!(tx.commit().is_ok())
+            tx.commit().unwrap();
         }
     }
 }

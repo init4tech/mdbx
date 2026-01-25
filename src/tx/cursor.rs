@@ -87,6 +87,17 @@ where
         self.db.flags()
     }
 
+    /// Returns `true` if the cursor is at EOF or not positioned.
+    ///
+    /// This can be used to check if the cursor has valid data before
+    /// performing operations that depend on cursor position.
+    pub fn is_eof(&self) -> bool {
+        self.txn
+            .txn_execute(|_| unsafe { ffi::mdbx_cursor_eof(self.cursor) })
+            .unwrap_or(ffi::MDBX_RESULT_TRUE)
+            == ffi::MDBX_RESULT_TRUE
+    }
+
     /// Validates that the database has the DUP_SORT flag set.
     #[inline(always)]
     fn require_dup_sort(&self) -> MdbxResult<()> {
@@ -165,8 +176,10 @@ where
     where
         Value: TableObject<'tx>,
     {
-        let (_, v, _) = codec_try_optional!(self.get::<(), Value>(key, data, op));
-
+        let (_, v, result_true) = codec_try_optional!(self.get::<(), Value>(key, data, op));
+        if result_true {
+            return Ok(None);
+        }
         Ok(Some(v))
     }
 
@@ -180,8 +193,10 @@ where
         Key: TableObject<'tx>,
         Value: TableObject<'tx>,
     {
-        let (k, v, _) = codec_try_optional!(self.get(key, data, op));
-
+        let (k, v, result_true) = codec_try_optional!(self.get(key, data, op));
+        if result_true {
+            return Ok(None);
+        }
         Ok(Some((k.unwrap(), v)))
     }
 
@@ -423,6 +438,9 @@ where
     /// until the end of the database. For new cursors, the iterator will begin
     /// with the first item in the database.
     ///
+    /// If the cursor is at EOF or not positioned (e.g., after exhausting a
+    /// previous iteration), it will be repositioned to the first item.
+    ///
     /// For databases with duplicate data items ([`DatabaseFlags::DUP_SORT`]),
     /// the duplicate data items of each key will be returned before moving on
     /// to the next key.
@@ -432,6 +450,13 @@ where
         Key: TableObject<'tx>,
         Value: TableObject<'tx>,
     {
+        if self.is_eof() {
+            // Reposition to first item
+            match self.first::<Key, Value>() {
+                Ok(Some(first)) => return IterKeyVals::from_ref_with(self, first),
+                Ok(None) | Err(_) => return IterKeyVals::end_from_ref(self),
+            }
+        }
         IterKeyVals::from_ref(self)
     }
 
@@ -449,9 +474,9 @@ where
 
     /// Iterate over database items starting from the beginning of the database.
     ///
-    /// For databases with duplicate data items ([`DatabaseFlags::DUP_SORT`]), the
-    /// duplicate data items of each key will be returned before moving on to
-    /// the next key.
+    /// For databases with duplicate data items ([`DatabaseFlags::DUP_SORT`]),
+    /// the duplicate data items of each key will be returned before moving on
+    /// to the next key.
     pub fn iter_start<'cur, Key, Value>(
         &'cur mut self,
     ) -> ReadResult<Iter<'tx, 'cur, K, Key, Value>>
@@ -469,9 +494,9 @@ where
 
     /// Iterate over database items starting from the given key.
     ///
-    /// For databases with duplicate data items ([`DatabaseFlags::DUP_SORT`]), the
-    /// duplicate data items of each key will be returned before moving on to
-    /// the next key.
+    /// For databases with duplicate data items ([`DatabaseFlags::DUP_SORT`]),
+    /// the duplicate data items of each key will be returned before moving on
+    /// to the next key.
     pub fn iter_from<'cur, Key, Value>(
         &'cur mut self,
         key: &[u8],
@@ -497,11 +522,20 @@ where
     /// current cursor position, and continue until the end of the database.
     /// For new cursors, the iterator will begin with the first key in the
     /// database.
+    ///
+    /// If the cursor is at EOF or not positioned (e.g., after exhausting a
+    /// previous iteration), it will be repositioned to the first item.
     pub fn iter_dup<'cur, Key, Value>(&'cur mut self) -> IterDup<'tx, 'cur, K, Key, Value>
     where
         Key: TableObject<'tx>,
         Value: TableObject<'tx>,
     {
+        if self.is_eof() {
+            match self.first::<Key, Value>() {
+                Ok(Some(first)) => return IterDup::from_ref_with(self, first),
+                Ok(None) | Err(_) => return IterDup::end_from_ref(self),
+            }
+        }
         IterDup::from_ref(self)
     }
 

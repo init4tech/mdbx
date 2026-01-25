@@ -12,6 +12,9 @@ fn bench_get_seq_iter(c: &mut Criterion) {
     let (_dir, env) = setup_bench_db(n);
     let txn = env.begin_ro_txn().unwrap();
     let db = txn.open_db(None).unwrap();
+    // Note: setup_bench_db creates a named database which adds metadata to the
+    // main database, so actual item count is n + 1
+    let actual_items = n + 1;
     c.bench_function("bench_get_seq_iter", |b| {
         b.iter(|| {
             let mut cursor = txn.cursor(db).unwrap();
@@ -42,7 +45,8 @@ fn bench_get_seq_iter(c: &mut Criterion) {
             iterate(&mut cursor).unwrap();
 
             black_box(i);
-            assert_eq!(count, n);
+            // Both loops iterate all items since iter() repositions exhausted cursors
+            assert_eq!(count, actual_items * 2);
         })
     });
 }
@@ -53,6 +57,9 @@ fn bench_get_seq_cursor(c: &mut Criterion) {
     let (_dir, env) = setup_bench_db(n);
     let txn = env.begin_ro_txn().unwrap();
     let db = txn.open_db(None).unwrap();
+    // Note: setup_bench_db creates a named database which adds metadata to the
+    // main database, so actual item count is n + 1
+    let actual_items = n + 1;
     c.bench_function("bench_get_seq_cursor", |b| {
         b.iter(|| {
             let (i, count) = txn
@@ -63,7 +70,7 @@ fn bench_get_seq_cursor(c: &mut Criterion) {
                 .fold((0, 0), |(i, count), (key, val)| (i + *key + *val, count + 1));
 
             black_box(i);
-            assert_eq!(count, n);
+            assert_eq!(count, actual_items);
         })
     });
 }
@@ -80,6 +87,10 @@ fn bench_get_seq_raw(c: &mut Criterion) {
     let mut data = MDBX_val { iov_len: 0, iov_base: ptr::null_mut() };
     let mut cursor: *mut MDBX_cursor = ptr::null_mut();
 
+    // Note: setup_bench_db creates a named database which adds metadata to the
+    // main database, so actual item count is n + 1
+    let actual_items = n + 1;
+
     c.bench_function("bench_get_seq_raw", |b| {
         b.iter(|| unsafe {
             txn.txn_execute(|txn| {
@@ -93,7 +104,7 @@ fn bench_get_seq_raw(c: &mut Criterion) {
                 }
 
                 black_box(i);
-                assert_eq!(count, n);
+                assert_eq!(count, actual_items);
                 mdbx_cursor_close(cursor);
             })
             .unwrap();

@@ -830,7 +830,7 @@ unsafe extern "C" {
         logger_buffer_size: usize,
     ) -> ::std::os::raw::c_int;
     pub fn mdbx_env_set_assert(env: *mut MDBX_env, func: MDBX_assert_func)
-        -> ::std::os::raw::c_int;
+    -> ::std::os::raw::c_int;
     pub fn mdbx_dump_val(
         key: *const MDBX_val,
         buf: *mut ::std::os::raw::c_char,
@@ -1011,9 +1011,9 @@ unsafe extern "C" {
     pub fn mdbx_txn_unpark(txn: *mut MDBX_txn, restart_if_ousted: bool) -> ::std::os::raw::c_int;
     pub fn mdbx_txn_renew(txn: *mut MDBX_txn) -> ::std::os::raw::c_int;
     pub fn mdbx_canary_put(txn: *mut MDBX_txn, canary: *const MDBX_canary)
-        -> ::std::os::raw::c_int;
+    -> ::std::os::raw::c_int;
     pub fn mdbx_canary_get(txn: *const MDBX_txn, canary: *mut MDBX_canary)
-        -> ::std::os::raw::c_int;
+    -> ::std::os::raw::c_int;
     pub fn mdbx_dbi_open(
         txn: *mut MDBX_txn,
         name: *const ::std::os::raw::c_char,
@@ -1162,7 +1162,7 @@ unsafe extern "C" {
         count: *mut usize,
     ) -> ::std::os::raw::c_int;
     pub fn mdbx_cursor_renew(txn: *mut MDBX_txn, cursor: *mut MDBX_cursor)
-        -> ::std::os::raw::c_int;
+    -> ::std::os::raw::c_int;
     pub fn mdbx_cursor_txn(cursor: *const MDBX_cursor) -> *mut MDBX_txn;
     pub fn mdbx_cursor_dbi(cursor: *const MDBX_cursor) -> MDBX_dbi;
     pub fn mdbx_cursor_copy(

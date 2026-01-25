@@ -12,15 +12,15 @@ fn test_get() {
     let env = Environment::builder().open(dir.path()).unwrap();
 
     let txn = env.begin_rw_txn().unwrap();
-    let dbi = txn.open_db(None).unwrap().dbi();
+    let db = txn.open_db(None).unwrap();
 
-    assert_eq!(None, txn.cursor(dbi).unwrap().first::<(), ()>().unwrap());
+    assert_eq!(None, txn.cursor(db).unwrap().first::<(), ()>().unwrap());
 
-    txn.put(dbi, b"key1", b"val1", WriteFlags::empty()).unwrap();
-    txn.put(dbi, b"key2", b"val2", WriteFlags::empty()).unwrap();
-    txn.put(dbi, b"key3", b"val3", WriteFlags::empty()).unwrap();
+    txn.put(db.dbi(), b"key1", b"val1", WriteFlags::empty()).unwrap();
+    txn.put(db.dbi(), b"key2", b"val2", WriteFlags::empty()).unwrap();
+    txn.put(db.dbi(), b"key3", b"val3", WriteFlags::empty()).unwrap();
 
-    let mut cursor = txn.cursor(dbi).unwrap();
+    let mut cursor = txn.cursor(db).unwrap();
     assert_eq!(cursor.first().unwrap(), Some((*b"key1", *b"val1")));
     assert_eq!(cursor.get_current().unwrap(), Some((*b"key1", *b"val1")));
     assert_eq!(cursor.next().unwrap(), Some((*b"key2", *b"val2")));
@@ -37,15 +37,15 @@ fn test_get_dup() {
     let env = Environment::builder().open(dir.path()).unwrap();
 
     let txn = env.begin_rw_txn().unwrap();
-    let dbi = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap().dbi();
-    txn.put(dbi, b"key1", b"val1", WriteFlags::empty()).unwrap();
-    txn.put(dbi, b"key1", b"val2", WriteFlags::empty()).unwrap();
-    txn.put(dbi, b"key1", b"val3", WriteFlags::empty()).unwrap();
-    txn.put(dbi, b"key2", b"val1", WriteFlags::empty()).unwrap();
-    txn.put(dbi, b"key2", b"val2", WriteFlags::empty()).unwrap();
-    txn.put(dbi, b"key2", b"val3", WriteFlags::empty()).unwrap();
+    let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
+    txn.put(db.dbi(), b"key1", b"val1", WriteFlags::empty()).unwrap();
+    txn.put(db.dbi(), b"key1", b"val2", WriteFlags::empty()).unwrap();
+    txn.put(db.dbi(), b"key1", b"val3", WriteFlags::empty()).unwrap();
+    txn.put(db.dbi(), b"key2", b"val1", WriteFlags::empty()).unwrap();
+    txn.put(db.dbi(), b"key2", b"val2", WriteFlags::empty()).unwrap();
+    txn.put(db.dbi(), b"key2", b"val3", WriteFlags::empty()).unwrap();
 
-    let mut cursor = txn.cursor(dbi).unwrap();
+    let mut cursor = txn.cursor(db).unwrap();
     assert_eq!(cursor.first().unwrap(), Some((*b"key1", *b"val1")));
     assert_eq!(cursor.first_dup().unwrap(), Some(*b"val1"));
     assert_eq!(cursor.get_current().unwrap(), Some((*b"key1", *b"val1")));
@@ -81,16 +81,15 @@ fn test_get_dupfixed() {
     let env = Environment::builder().open(dir.path()).unwrap();
 
     let txn = env.begin_rw_txn().unwrap();
-    let dbi =
-        txn.create_db(None, DatabaseFlags::DUP_SORT | DatabaseFlags::DUP_FIXED).unwrap().dbi();
-    txn.put(dbi, b"key1", b"val1", WriteFlags::empty()).unwrap();
-    txn.put(dbi, b"key1", b"val2", WriteFlags::empty()).unwrap();
-    txn.put(dbi, b"key1", b"val3", WriteFlags::empty()).unwrap();
-    txn.put(dbi, b"key2", b"val4", WriteFlags::empty()).unwrap();
-    txn.put(dbi, b"key2", b"val5", WriteFlags::empty()).unwrap();
-    txn.put(dbi, b"key2", b"val6", WriteFlags::empty()).unwrap();
+    let db = txn.create_db(None, DatabaseFlags::DUP_SORT | DatabaseFlags::DUP_FIXED).unwrap();
+    txn.put(db.dbi(), b"key1", b"val1", WriteFlags::empty()).unwrap();
+    txn.put(db.dbi(), b"key1", b"val2", WriteFlags::empty()).unwrap();
+    txn.put(db.dbi(), b"key1", b"val3", WriteFlags::empty()).unwrap();
+    txn.put(db.dbi(), b"key2", b"val4", WriteFlags::empty()).unwrap();
+    txn.put(db.dbi(), b"key2", b"val5", WriteFlags::empty()).unwrap();
+    txn.put(db.dbi(), b"key2", b"val6", WriteFlags::empty()).unwrap();
 
-    let mut cursor = txn.cursor(dbi).unwrap();
+    let mut cursor = txn.cursor(db).unwrap();
     assert_eq!(cursor.first().unwrap(), Some((*b"key1", *b"val1")));
     assert_eq!(cursor.get_multiple().unwrap(), Some(*b"val1val2val3"));
     assert_eq!(cursor.next_multiple::<(), ()>().unwrap(), None);
@@ -118,8 +117,8 @@ fn test_iter() {
     }
 
     let txn = env.begin_ro_txn().unwrap();
-    let dbi = txn.open_db(None).unwrap().dbi();
-    let mut cursor = txn.cursor(dbi).unwrap();
+    let db = txn.open_db(None).unwrap();
+    let mut cursor = txn.cursor(db).unwrap();
 
     // Because Result implements FromIterator, we can collect the iterator
     // of items of type Result<_, E> into a Result<Vec<_, E>> by specifying
@@ -159,8 +158,8 @@ fn test_iter_empty_database() {
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
     let txn = env.begin_ro_txn().unwrap();
-    let dbi = txn.open_db(None).unwrap().dbi();
-    let mut cursor = txn.cursor(dbi).unwrap();
+    let db = txn.open_db(None).unwrap();
+    let mut cursor = txn.cursor(db).unwrap();
 
     assert!(cursor.iter::<(), ()>().next().is_none());
     assert!(cursor.iter_start::<(), ()>().unwrap().next().is_none());
@@ -177,8 +176,8 @@ fn test_iter_empty_dup_database() {
     txn.commit().unwrap();
 
     let txn = env.begin_ro_txn().unwrap();
-    let dbi = txn.open_db(None).unwrap().dbi();
-    let mut cursor = txn.cursor(dbi).unwrap();
+    let db = txn.open_db(None).unwrap();
+    let mut cursor = txn.cursor(db).unwrap();
 
     assert!(cursor.iter::<(), ()>().next().is_none());
     assert!(cursor.iter_start::<(), ()>().unwrap().next().is_none());
@@ -227,8 +226,8 @@ fn test_iter_dup() {
     }
 
     let txn = env.begin_ro_txn().unwrap();
-    let dbi = txn.open_db(None).unwrap().dbi();
-    let mut cursor = txn.cursor(dbi).unwrap();
+    let db = txn.open_db(None).unwrap();
+    let mut cursor = txn.cursor(db).unwrap();
     assert_eq!(items, cursor.iter_dup().flatten().flatten().collect::<Result<Vec<_>>>().unwrap());
 
     cursor.set::<()>(b"b").unwrap();
@@ -302,9 +301,9 @@ fn test_iter_del_get() {
     let items = vec![(*b"a", *b"1"), (*b"b", *b"2")];
     {
         let txn = env.begin_rw_txn().unwrap();
-        let dbi = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap().dbi();
+        let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
         assert_eq!(
-            txn.cursor(dbi)
+            txn.cursor(db)
                 .unwrap()
                 .iter_dup_of::<(), ()>(b"a")
                 .unwrap()
@@ -326,8 +325,8 @@ fn test_iter_del_get() {
     }
 
     let txn = env.begin_rw_txn().unwrap();
-    let dbi = txn.open_db(None).unwrap().dbi();
-    let mut cursor = txn.cursor(dbi).unwrap();
+    let db = txn.open_db(None).unwrap();
+    let mut cursor = txn.cursor(db).unwrap();
     assert_eq!(
         items,
         cursor.iter_dup_start().unwrap().flatten().flatten().collect::<Result<Vec<_>>>().unwrap()
@@ -359,8 +358,8 @@ fn test_put_del() {
     let env = Environment::builder().open(dir.path()).unwrap();
 
     let txn = env.begin_rw_txn().unwrap();
-    let dbi = txn.open_db(None).unwrap().dbi();
-    let mut cursor = txn.cursor(dbi).unwrap();
+    let db = txn.open_db(None).unwrap();
+    let mut cursor = txn.cursor(db).unwrap();
 
     cursor.put(b"key1", b"val1", WriteFlags::empty()).unwrap();
     cursor.put(b"key2", b"val2", WriteFlags::empty()).unwrap();
@@ -384,4 +383,102 @@ fn test_put_del() {
         cursor.last().unwrap(),
         Some((Cow::Borrowed(b"key3" as &[u8]), Cow::Borrowed(b"val3" as &[u8])))
     );
+}
+
+#[test]
+fn test_dup_sort_validation_on_non_dupsort_db() {
+    let dir = tempdir().unwrap();
+    let env = Environment::builder().open(dir.path()).unwrap();
+
+    let txn = env.begin_rw_txn().unwrap();
+    let db = txn.open_db(None).unwrap(); // Non-DUPSORT database
+    txn.put(db.dbi(), b"key1", b"val1", WriteFlags::empty()).unwrap();
+
+    let mut cursor = txn.cursor(db).unwrap();
+    cursor.first::<(), ()>().unwrap(); // Position cursor
+
+    // These should return RequiresDupSort error
+    let err = cursor.first_dup::<()>().unwrap_err();
+    assert!(matches!(err, ReadError::Mdbx(MdbxError::RequiresDupSort)));
+
+    let err = cursor.last_dup::<()>().unwrap_err();
+    assert!(matches!(err, ReadError::Mdbx(MdbxError::RequiresDupSort)));
+
+    let err = cursor.next_dup::<(), ()>().unwrap_err();
+    assert!(matches!(err, ReadError::Mdbx(MdbxError::RequiresDupSort)));
+
+    let err = cursor.prev_dup::<(), ()>().unwrap_err();
+    assert!(matches!(err, ReadError::Mdbx(MdbxError::RequiresDupSort)));
+
+    let err = cursor.get_both::<()>(b"key1", b"val1").unwrap_err();
+    assert!(matches!(err, ReadError::Mdbx(MdbxError::RequiresDupSort)));
+
+    let err = cursor.get_both_range::<()>(b"key1", b"val").unwrap_err();
+    assert!(matches!(err, ReadError::Mdbx(MdbxError::RequiresDupSort)));
+}
+
+#[test]
+fn test_dup_fixed_validation_on_non_dupfixed_db() {
+    let dir = tempdir().unwrap();
+    let env = Environment::builder().open(dir.path()).unwrap();
+
+    let txn = env.begin_rw_txn().unwrap();
+    // Create DUPSORT but NOT DUPFIXED database
+    let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
+    txn.put(db.dbi(), b"key1", b"val1", WriteFlags::empty()).unwrap();
+
+    let mut cursor = txn.cursor(db).unwrap();
+    cursor.first::<(), ()>().unwrap(); // Position cursor
+
+    // These should return RequiresDupFixed error
+    let err = cursor.get_multiple::<()>().unwrap_err();
+    assert!(matches!(err, ReadError::Mdbx(MdbxError::RequiresDupFixed)));
+
+    let err = cursor.next_multiple::<(), ()>().unwrap_err();
+    assert!(matches!(err, ReadError::Mdbx(MdbxError::RequiresDupFixed)));
+
+    let err = cursor.prev_multiple::<(), ()>().unwrap_err();
+    assert!(matches!(err, ReadError::Mdbx(MdbxError::RequiresDupFixed)));
+}
+
+#[test]
+fn test_dup_sort_methods_work_on_dupsort_db() {
+    let dir = tempdir().unwrap();
+    let env = Environment::builder().open(dir.path()).unwrap();
+
+    let txn = env.begin_rw_txn().unwrap();
+    let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
+    txn.put(db.dbi(), b"key1", b"val1", WriteFlags::empty()).unwrap();
+    txn.put(db.dbi(), b"key1", b"val2", WriteFlags::empty()).unwrap();
+
+    let mut cursor = txn.cursor(db).unwrap();
+    cursor.first::<(), ()>().unwrap();
+
+    // These should work without error on a DUPSORT database
+    assert!(cursor.first_dup::<()>().is_ok());
+    assert!(cursor.last_dup::<()>().is_ok());
+    assert!(cursor.next_dup::<(), ()>().is_ok());
+    assert!(cursor.prev_dup::<(), ()>().is_ok());
+    assert!(cursor.get_both::<()>(b"key1", b"val1").is_ok());
+    assert!(cursor.get_both_range::<()>(b"key1", b"val").is_ok());
+}
+
+#[test]
+fn test_dup_fixed_methods_work_on_dupfixed_db() {
+    let dir = tempdir().unwrap();
+    let env = Environment::builder().open(dir.path()).unwrap();
+
+    let txn = env.begin_rw_txn().unwrap();
+    let db = txn.create_db(None, DatabaseFlags::DUP_SORT | DatabaseFlags::DUP_FIXED).unwrap();
+    txn.put(db.dbi(), b"key1", b"val1", WriteFlags::empty()).unwrap();
+    txn.put(db.dbi(), b"key1", b"val2", WriteFlags::empty()).unwrap();
+
+    let mut cursor = txn.cursor(db).unwrap();
+    cursor.first::<(), ()>().unwrap();
+
+    // These should work without error on a DUPFIXED database
+    assert!(cursor.get_multiple::<()>().is_ok());
+    // next_multiple and prev_multiple may return None but shouldn't error
+    assert!(cursor.next_multiple::<(), ()>().is_ok());
+    assert!(cursor.prev_multiple::<(), ()>().is_ok());
 }

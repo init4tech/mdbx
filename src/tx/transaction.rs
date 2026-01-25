@@ -405,13 +405,14 @@ where
     }
 
     /// Open a new cursor on the given database.
-    pub fn cursor(&self, dbi: ffi::MDBX_dbi) -> MdbxResult<Cursor<'_, K>> {
-        Cursor::new(self, dbi)
+    pub fn cursor(&self, db: Database) -> MdbxResult<Cursor<'_, K>> {
+        Cursor::new(self, db)
     }
 
     /// Open a new cursor on the given dbi.
-    pub fn cursor_with_dbi(&self, dbi: ffi::MDBX_dbi) -> MdbxResult<Cursor<'_, K>> {
-        Cursor::new(self, dbi)
+    #[deprecated(since = "0.2.0", note = "use `cursor(&Database)` instead")]
+    pub fn cursor_with_dbi(&self, db: Database) -> MdbxResult<Cursor<'_, K>> {
+        Cursor::new(self, db)
     }
 
     /// Disables a timeout for this read transaction.

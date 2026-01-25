@@ -46,7 +46,7 @@
 //! # let env = Environment::builder().open(Path::new("/tmp/iter_example")).unwrap();
 //! let txn = env.begin_ro_txn().unwrap();
 //! let db = txn.open_db(None).unwrap();
-//! let mut cursor = txn.cursor(db.dbi()).unwrap();
+//! let mut cursor = txn.cursor(&db).unwrap();
 //!
 //! // Iterate using the standard Iterator trait (owned)
 //! for result in cursor.iter_start::<Vec<u8>, Vec<u8>>().unwrap() {
@@ -401,11 +401,12 @@ where
                 // not invalidate any data borrowed from the inner cursor.
                 //
                 // This is an inlined version of Cursor::new_at_position.
+                let db = self.inner.cursor.as_ref().db();
                 let dup_cursor = tx.txn_execute(move |_| unsafe {
                     let new_cursor = ffi::mdbx_cursor_create(ptr::null_mut());
                     let res = ffi::mdbx_cursor_copy(cursor_ptr, new_cursor);
                     mdbx_result(res)?;
-                    Ok::<_, MdbxError>(Cursor::new_raw(tx, new_cursor))
+                    Ok::<_, MdbxError>(Cursor::new_raw(tx, new_cursor, db))
                 })??;
 
                 Ok(Some(IterDupVals::from_owned_with(dup_cursor, (key, value))))

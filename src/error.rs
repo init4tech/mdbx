@@ -177,6 +177,12 @@ pub enum MdbxError {
     /// Unknown error code.
     #[error("unknown error code: {0}")]
     Other(i32),
+    /// Operation requires DUP_SORT flag on database.
+    #[error("operation requires DUP_SORT flag on database")]
+    RequiresDupSort,
+    /// Operation requires DUP_FIXED flag on database.
+    #[error("operation requires DUP_FIXED flag on database")]
+    RequiresDupFixed,
 }
 
 impl MdbxError {
@@ -253,6 +259,8 @@ impl MdbxError {
             | Self::NestedTransactionsUnsupportedWithWriteMap => ffi::MDBX_EACCESS,
             Self::ReadTransactionTimeout => -96000, // Custom non-MDBX error code
             Self::BotchedTransaction => -96001,
+            Self::RequiresDupSort => -96002,
+            Self::RequiresDupFixed => -96003,
             Self::Permission => ffi::MDBX_EPERM,
             Self::Other(err_code) => *err_code,
         }

@@ -209,7 +209,7 @@ impl Environment {
         let mut freelist: usize = 0;
         let txn = self.begin_ro_txn()?;
         let db = Database::freelist_db();
-        let mut cursor = txn.cursor(db.dbi())?;
+        let mut cursor = txn.cursor(db)?;
         let mut iter = cursor.iter_slices();
 
         while let Some((_key, value)) = iter.borrow_next()? {

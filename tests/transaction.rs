@@ -50,9 +50,9 @@ fn test_put_get_del_multi() {
     txn.commit().unwrap();
 
     let txn = env.begin_rw_txn().unwrap();
-    let dbi = txn.open_db(None).unwrap().dbi();
+    let db = txn.open_db(None).unwrap();
     {
-        let mut cur = txn.cursor(dbi).unwrap();
+        let mut cur = txn.cursor(db).unwrap();
         let iter = cur.iter_dup_of::<(), [u8; 4]>(b"key1").unwrap();
         let vals = iter.map(|x| x.unwrap()).map(|(_, x)| x).collect::<Vec<_>>();
         assert_eq!(vals, vec![*b"val1", *b"val2", *b"val3"]);
@@ -66,9 +66,9 @@ fn test_put_get_del_multi() {
     txn.commit().unwrap();
 
     let txn = env.begin_rw_txn().unwrap();
-    let dbi = txn.open_db(None).unwrap().dbi();
+    let db = txn.open_db(None).unwrap();
     {
-        let mut cur = txn.cursor(dbi).unwrap();
+        let mut cur = txn.cursor(db).unwrap();
         let iter = cur.iter_dup_of::<(), [u8; 4]>(b"key1").unwrap();
         let vals = iter.map(|x| x.unwrap()).map(|(_, x)| x).collect::<Vec<_>>();
         assert_eq!(vals, vec![*b"val1", *b"val3"]);

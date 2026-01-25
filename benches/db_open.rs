@@ -67,7 +67,9 @@ fn bench_open_db_cached(c: &mut Criterion) {
     // Prime the cache
     let _ = txn.open_db(None).unwrap();
 
-    c.bench_function("db_cache::unnamed::hit", |b| b.iter(|| black_box(txn.open_db(None).unwrap())));
+    c.bench_function("db_cache::unnamed::hit", |b| {
+        b.iter(|| black_box(txn.open_db(None).unwrap()))
+    });
 }
 
 /// Benchmark uncached DB opens (always FFI call)
@@ -87,7 +89,9 @@ fn bench_open_db_cached_named(c: &mut Criterion) {
     // Prime the cache
     let _ = txn.open_db(Some(NAMED_DB)).unwrap();
 
-    c.bench_function("db_cache::named::hit", |b| b.iter(|| black_box(txn.open_db(Some(NAMED_DB)).unwrap())));
+    c.bench_function("db_cache::named::hit", |b| {
+        b.iter(|| black_box(txn.open_db(Some(NAMED_DB)).unwrap()))
+    });
 }
 
 /// Benchmark uncached DB opens (always FFI call)
@@ -99,7 +103,6 @@ fn bench_open_db_no_cache_named(c: &mut Criterion) {
         b.iter(|| black_box(txn.open_db_no_cache(Some(NAMED_DB)).unwrap()))
     });
 }
-
 
 criterion_group! {
     name = db_open;

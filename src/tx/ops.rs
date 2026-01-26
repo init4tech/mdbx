@@ -25,7 +25,7 @@ use crate::{
     flags::{DatabaseFlags, WriteFlags},
 };
 use std::{
-    ffi::{c_uint, c_void},
+    ffi::{c_char, c_uint, c_void},
     mem::size_of,
     ptr, slice,
 };
@@ -67,7 +67,7 @@ pub(crate) unsafe fn get_raw(
 #[inline(always)]
 pub(crate) unsafe fn open_db_raw(
     txn: *mut ffi::MDBX_txn,
-    name_ptr: *const i8,
+    name_ptr: *const c_char,
     flags: DatabaseFlags,
 ) -> MdbxResult<(ffi::MDBX_dbi, DatabaseFlags)> {
     let mut dbi: ffi::MDBX_dbi = 0;

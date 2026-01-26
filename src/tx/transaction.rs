@@ -1,136 +1,18 @@
 use crate::{
-    Cursor, Database, Environment, MdbxError, ReadResult, Stat, TableObject,
+    Cursor, Database, Environment, MdbxError, RO, RW, ReadResult, Stat, TableObject,
+    TransactionKind,
     error::{MdbxResult, mdbx_result},
     flags::{DatabaseFlags, WriteFlags},
-    sys::txn_manager::{TxnManagerMessage, TxnPtr},
+    sys::txn_manager::{RawTxPtr, TxnManagerMessage},
+    tx::{CachedDb, PtrSync, SharedCache, TxPtrAccess, ops},
 };
-use ffi::{MDBX_TXN_RDONLY, MDBX_TXN_READWRITE, MDBX_txn_flags_t};
-use parking_lot::{Mutex, MutexGuard, RwLock};
 use smallvec::SmallVec;
 use std::{
-    ffi::{CStr, c_uint, c_void},
-    fmt::{self, Debug},
-    hash::{Hash, Hasher},
-    mem::size_of,
-    ptr, slice,
-    sync::{Arc, atomic::AtomicBool, mpsc::sync_channel},
+    ffi::CStr,
+    fmt, ptr,
+    sync::{Arc, mpsc::sync_channel},
     time::Duration,
 };
-
-mod private {
-    use super::*;
-
-    pub trait Sealed {}
-
-    impl Sealed for RO {}
-    impl Sealed for RW {}
-}
-
-/// Marker trait for transaction kinds. Either [`RO`] or [`RW`].
-pub trait TransactionKind: private::Sealed + Send + Sync + Debug + 'static {
-    #[doc(hidden)]
-    const OPEN_FLAGS: MDBX_txn_flags_t;
-
-    /// Convenience flag for distinguishing between read-only and read-write transactions.
-    #[doc(hidden)]
-    const IS_READ_ONLY: bool;
-}
-
-#[derive(Debug, Clone, Copy)]
-#[non_exhaustive]
-/// Marker type for read-only transactions.
-pub struct RO;
-
-#[derive(Debug, Clone, Copy)]
-#[non_exhaustive]
-/// Marker type for read-write transactions.
-pub struct RW;
-
-impl TransactionKind for RO {
-    const OPEN_FLAGS: MDBX_txn_flags_t = MDBX_TXN_RDONLY;
-    const IS_READ_ONLY: bool = true;
-}
-impl TransactionKind for RW {
-    const OPEN_FLAGS: MDBX_txn_flags_t = MDBX_TXN_READWRITE;
-    const IS_READ_ONLY: bool = false;
-}
-
-/// Cached database entry.
-///
-/// Uses hash-only comparison since 64-bit hash collisions are negligible
-/// for practical database counts.
-#[derive(Debug, Clone, Copy)]
-struct CachedDb {
-    /// Hash of database name (None hashes distinctly from any string).
-    name_hash: u64,
-    /// The cached database (dbi + flags).
-    db: Database,
-}
-
-impl From<CachedDb> for Database {
-    fn from(value: CachedDb) -> Self {
-        value.db
-    }
-}
-
-/// Simple cache container for database handles.
-///
-/// Uses inline storage for the common case (most apps use < 16 databases).
-#[derive(Debug)]
-struct DbCache {
-    entries: RwLock<SmallVec<[CachedDb; 16]>>,
-}
-
-impl DbCache {
-    /// Creates a new empty cache.
-    fn new() -> Self {
-        Self { entries: RwLock::new(SmallVec::new()) }
-    }
-
-    /// Returns a read guard to the cache entries.
-    fn read(&self) -> parking_lot::RwLockReadGuard<'_, SmallVec<[CachedDb; 16]>> {
-        self.entries.read()
-    }
-
-    /// Returns a write guard to the cache entries.
-    fn write(&self) -> parking_lot::RwLockWriteGuard<'_, SmallVec<[CachedDb; 16]>> {
-        self.entries.write()
-    }
-
-    /// Read a database entry from the cache.
-    fn read_db(&self, name_hash: u64) -> Option<Database> {
-        let entries = self.read();
-        for entry in entries.iter() {
-            if entry.name_hash == name_hash {
-                return Some(entry.db);
-            }
-        }
-        None
-    }
-
-    /// Write a database entry to the cache.
-    fn write_db(&self, db: CachedDb) {
-        let mut entries = self.write();
-        for entry in entries.iter() {
-            if entry.name_hash == db.name_hash {
-                return; // Another thread beat us
-            }
-        }
-        entries.push(db);
-    }
-
-    /// Remove a database entry from the cache by dbi.
-    fn remove_dbi(&self, dbi: ffi::MDBX_dbi) {
-        let mut entries = self.write();
-        entries.retain(|entry| entry.db.dbi() != dbi);
-    }
-}
-
-impl Default for DbCache {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 /// An MDBX transaction.
 ///
@@ -146,35 +28,10 @@ impl<K> Transaction<K>
 where
     K: TransactionKind,
 {
-    pub(crate) fn new(env: Environment) -> MdbxResult<Self> {
-        let mut txn: *mut ffi::MDBX_txn = ptr::null_mut();
-        unsafe {
-            mdbx_result(ffi::mdbx_txn_begin_ex(
-                env.env_ptr(),
-                ptr::null_mut(),
-                K::OPEN_FLAGS,
-                &mut txn,
-                ptr::null_mut(),
-            ))?;
-            Ok(Self::new_from_ptr(env, txn))
-        }
-    }
-
     pub(crate) fn new_from_ptr(env: Environment, txn_ptr: *mut ffi::MDBX_txn) -> Self {
-        let txn = TransactionPtr::new(txn_ptr);
+        let txn = PtrSync::<K>::new(env, txn_ptr);
 
-        #[cfg(feature = "read-tx-timeouts")]
-        if K::IS_READ_ONLY {
-            env.txn_manager().add_active_read_transaction(txn_ptr, txn.clone())
-        }
-
-        let inner = TransactionInner {
-            txn,
-            committed: AtomicBool::new(false),
-            env,
-            db_cache: DbCache::default(),
-            _marker: Default::default(),
-        };
+        let inner = TransactionInner { ptr: txn, db_cache: SharedCache::default() };
 
         Self { inner: Arc::new(inner) }
     }
@@ -203,16 +60,20 @@ where
         self.inner.txn_execute_renew_on_timeout(f)
     }
 
-    /// Returns a copy of the raw pointer to the underlying MDBX transaction.
-    #[doc(hidden)]
-    #[allow(dead_code)]
-    pub(crate) fn txn(&self) -> *mut ffi::MDBX_txn {
-        self.inner.txn.txn
-    }
-
     /// Returns a raw pointer to the MDBX environment.
     pub fn env(&self) -> &Environment {
-        &self.inner.env
+        self.inner.env()
+    }
+
+    /// Returns the tracing span for this transaction.
+    ///
+    /// Users can enter this span to associate operations with the transaction:
+    /// ```ignore
+    /// let _guard = txn.span().enter();
+    /// // operations here are within the transaction span
+    /// ```
+    pub fn span(&self) -> &tracing::Span {
+        self.inner.span()
     }
 
     /// Returns the transaction id.
@@ -232,15 +93,17 @@ where
     where
         Key: TableObject<'a>,
     {
-        let key_val: ffi::MDBX_val =
-            ffi::MDBX_val { iov_len: key.len(), iov_base: key.as_ptr() as *mut c_void };
-        let mut data_val: ffi::MDBX_val = ffi::MDBX_val { iov_len: 0, iov_base: ptr::null_mut() };
-
-        self.txn_execute(|txn| unsafe {
-            match ffi::mdbx_get(txn, dbi, &key_val, &mut data_val) {
-                ffi::MDBX_SUCCESS => Key::decode_val::<K>(self, data_val).map(Some),
-                ffi::MDBX_NOTFOUND => Ok(None),
-                err_code => Err(MdbxError::from_err_code(err_code).into()),
+        self.txn_execute(|txn_ptr| {
+            // SAFETY:
+            // txn is a valid transaction pointer from txn_execute.
+            // The decoded Cow is valid as long as the data is not dirty, and
+            // the tx is alive.
+            // The lifetime 'tx statically guarantees that the Cow cannot
+            // outlive the transaction.
+            // `decode_val` checks for dirty writes and copies data if needed.
+            unsafe {
+                let data_val = ops::get_raw(txn_ptr, dbi, key)?;
+                data_val.map(|val| Key::decode_val::<K>(txn_ptr, val)).transpose()
             }
         })?
     }
@@ -249,7 +112,9 @@ where
     ///
     /// Any pending operations will be saved.
     pub fn commit(self) -> MdbxResult<CommitLatency> {
-        match self.txn_execute(|txn| {
+        let _guard = self.inner.span().enter();
+
+        let (was_aborted, lat) = self.txn_execute(|txn| {
             if K::IS_READ_ONLY {
                 #[cfg(feature = "read-tx-timeouts")]
                 self.env().txn_manager().remove_active_read_transaction(txn);
@@ -261,24 +126,24 @@ where
                 let (sender, rx) = sync_channel(0);
                 self.env()
                     .txn_manager()
-                    .send_message(TxnManagerMessage::Commit { tx: TxnPtr(txn), sender });
+                    .send_message(TxnManagerMessage::Commit { tx: RawTxPtr(txn), sender });
                 rx.recv().unwrap()
             }
-        })? {
-            //
-            Ok((false, lat)) => {
-                self.inner.set_committed();
-                Ok(lat)
-            }
-            Ok((true, _)) => {
-                // MDBX_RESULT_TRUE means the transaction was aborted due to prior errors.
-                // The transaction is still finished/freed by MDBX, so we must mark it as
-                // committed to prevent the Drop impl from trying to abort it again.
-                self.inner.set_committed();
-                Err(MdbxError::BotchedTransaction)
-            }
-            Err(e) => Err(e),
+        })??;
+
+        self.inner.ptr.mark_committed();
+
+        if was_aborted {
+            tracing::warn!(target: "libmdbx", "botched");
+            return Err(MdbxError::BotchedTransaction);
         }
+
+        tracing::debug!(
+            target: "libmdbx",
+            latency_whole_ms = lat.whole().as_millis() as u64,
+            "committed"
+        );
+        Ok(lat)
     }
 
     /// Opens a handle to an MDBX database, and cache the handle for re-use.
@@ -298,7 +163,7 @@ where
     ///
     /// The database name MAY NOT contain the null character.
     pub fn open_db(&self, name: Option<&str>) -> MdbxResult<Database> {
-        let name_hash = Self::hash_name(name);
+        let name_hash = CachedDb::hash_name(name);
 
         if let Some(db) = self.inner.db_cache.read_db(name_hash) {
             return Ok(db);
@@ -342,50 +207,20 @@ where
         });
         let name_ptr = c_name.as_ref().map_or(ptr::null(), |s| s.as_ptr());
 
-        // Single txn_execute: open dbi AND read flags
-        let db = self.txn_execute(|txn_ptr| {
-            let mut dbi: ffi::MDBX_dbi = 0;
-            mdbx_result(unsafe { ffi::mdbx_dbi_open(txn_ptr, name_ptr, flags.bits(), &mut dbi) })?;
-
-            // Read actual flags (may differ from requested due to ACCEDE)
-            let mut actual_flags: c_uint = 0;
-            let mut _status: c_uint = 0;
-            mdbx_result(unsafe {
-                ffi::mdbx_dbi_flags_ex(txn_ptr, dbi, &mut actual_flags, &mut _status)
-            })?;
-
-            // The types are not the same on Windows. Great!
-            #[cfg_attr(not(windows), allow(clippy::useless_conversion))]
-            let db_flags = DatabaseFlags::from_bits_truncate(actual_flags.try_into().unwrap());
-
-            Ok(Database::new(dbi, db_flags))
+        let (dbi, db_flags) = self.txn_execute(|txn_ptr| {
+            // SAFETY: txn_ptr is valid from txn_execute, name_ptr is valid or null.
+            unsafe { ops::open_db_raw(txn_ptr, name_ptr, flags) }
         })??;
-        Ok(CachedDb { name_hash: Self::hash_name(name), db })
-    }
 
-    #[inline]
-    fn hash_name(name: Option<&str>) -> u64 {
-        let mut hasher = std::hash::DefaultHasher::new();
-        name.hash(&mut hasher);
-        hasher.finish()
+        Ok(CachedDb::new(name, Database::new(dbi, db_flags)))
     }
 
     /// Gets the option flags for the given database in the transaction.
     pub fn db_flags(&self, dbi: ffi::MDBX_dbi) -> MdbxResult<DatabaseFlags> {
-        let mut flags: c_uint = 0;
-        unsafe {
-            self.txn_execute(|txn| {
-                // `mdbx_dbi_flags_ex` requires `status` to be a non-NULL ptr, otherwise it will
-                // return an EINVAL and panic below, so we just provide a placeholder variable
-                // which we discard immediately.
-                let mut _status: c_uint = 0;
-                mdbx_result(ffi::mdbx_dbi_flags_ex(txn, dbi, &mut flags, &mut _status))
-            })??;
-        }
-
-        // The types are not the same on Windows. Great!
-        #[cfg_attr(not(windows), allow(clippy::useless_conversion))]
-        Ok(DatabaseFlags::from_bits_truncate(flags.try_into().unwrap()))
+        self.txn_execute(|txn| {
+            // SAFETY: txn is a valid transaction pointer from txn_execute.
+            unsafe { ops::db_flags_raw(txn, dbi) }
+        })?
     }
 
     /// Retrieves database statistics.
@@ -395,13 +230,10 @@ where
 
     /// Retrieves database statistics by the given dbi.
     pub fn db_stat_with_dbi(&self, dbi: ffi::MDBX_dbi) -> MdbxResult<Stat> {
-        unsafe {
-            let mut stat = Stat::new();
-            self.txn_execute(|txn| {
-                mdbx_result(ffi::mdbx_dbi_stat(txn, dbi, stat.mdb_stat(), size_of::<Stat>()))
-            })??;
-            Ok(stat)
-        }
+        self.txn_execute(|txn| {
+            // SAFETY: txn is a valid transaction pointer from txn_execute.
+            unsafe { ops::db_stat_raw(txn, dbi) }
+        })?
     }
 
     /// Open a new cursor on the given database.
@@ -419,7 +251,11 @@ where
     #[cfg(feature = "read-tx-timeouts")]
     pub fn disable_timeout(&self) {
         if K::IS_READ_ONLY {
-            self.env().txn_manager().remove_active_read_transaction(self.inner.txn.txn);
+            // SAFETY: Not performing any operation on the txn, just updating
+            // internal state.
+            self.env()
+                .txn_manager()
+                .remove_active_read_transaction(unsafe { self.inner.ptr.txn_ptr() });
         }
     }
 }
@@ -448,30 +284,22 @@ where
     K: TransactionKind,
 {
     /// The transaction pointer itself.
-    txn: TransactionPtr,
-    /// Whether the transaction has committed.
-    committed: AtomicBool,
-
-    /// Hold open the environment.
-    env: Environment,
+    ptr: PtrSync<K>,
 
     /// Cache of opened database handles.
-    db_cache: DbCache,
-
-    _marker: std::marker::PhantomData<fn() -> K>,
+    db_cache: SharedCache,
 }
 
 impl<K> TransactionInner<K>
 where
     K: TransactionKind,
 {
-    /// Marks the transaction as committed.
-    fn set_committed(&self) {
-        self.committed.store(true, std::sync::atomic::Ordering::SeqCst);
+    fn env(&self) -> &Environment {
+        self.ptr.env()
     }
 
-    fn has_committed(&self) -> bool {
-        self.committed.load(std::sync::atomic::Ordering::SeqCst)
+    fn span(&self) -> &tracing::Span {
+        self.ptr.span()
     }
 
     #[inline]
@@ -479,7 +307,7 @@ where
     where
         F: FnOnce(*mut ffi::MDBX_txn) -> T,
     {
-        self.txn.txn_execute_fail_on_timeout(f)
+        self.ptr.txn_execute_fail_on_timeout(f)
     }
 
     #[inline]
@@ -487,37 +315,7 @@ where
     where
         F: FnOnce(*mut ffi::MDBX_txn) -> T,
     {
-        self.txn.txn_execute_renew_on_timeout(f)
-    }
-}
-
-impl<K> Drop for TransactionInner<K>
-where
-    K: TransactionKind,
-{
-    fn drop(&mut self) {
-        // To be able to abort a timed out transaction, we need to renew it
-        // first. Hence the usage of `txn_execute_renew_on_timeout` here.
-        self.txn
-            .txn_execute_renew_on_timeout(|txn| {
-                if !self.has_committed() {
-                    if K::IS_READ_ONLY {
-                        #[cfg(feature = "read-tx-timeouts")]
-                        self.env.txn_manager().remove_active_read_transaction(txn);
-
-                        unsafe {
-                            ffi::mdbx_txn_abort(txn);
-                        }
-                    } else {
-                        let (sender, rx) = sync_channel(0);
-                        self.env
-                            .txn_manager()
-                            .send_message(TxnManagerMessage::Abort { tx: TxnPtr(txn), sender });
-                        rx.recv().unwrap().unwrap();
-                    }
-                }
-            })
-            .unwrap();
+        self.ptr.txn_execute_renew_on_timeout(f)
     }
 }
 
@@ -539,7 +337,7 @@ impl Transaction<RW> {
     ///
     /// [`EnvironmentBuilder::set_max_dbs()`]: crate::EnvironmentBuilder::set_max_dbs
     pub fn create_db(&self, name: Option<&str>, flags: DatabaseFlags) -> MdbxResult<Database> {
-        self.open_db_with_flags(name, flags | DatabaseFlags::CREATE).map(|db| db.db)
+        self.open_db_with_flags(name, flags | DatabaseFlags::CREATE).map(Into::into)
     }
 
     /// Stores an item into a database.
@@ -557,15 +355,10 @@ impl Transaction<RW> {
     ) -> MdbxResult<()> {
         let key = key.as_ref();
         let data = data.as_ref();
-        let key_val: ffi::MDBX_val =
-            ffi::MDBX_val { iov_len: key.len(), iov_base: key.as_ptr() as *mut c_void };
-        let mut data_val: ffi::MDBX_val =
-            ffi::MDBX_val { iov_len: data.len(), iov_base: data.as_ptr() as *mut c_void };
-        mdbx_result(self.txn_execute(|txn| unsafe {
-            ffi::mdbx_put(txn, dbi, &key_val, &mut data_val, flags.bits())
-        })?)?;
-
-        Ok(())
+        self.txn_execute(|txn| {
+            // SAFETY: txn is a valid RW transaction pointer from txn_execute.
+            unsafe { ops::put_raw(txn, dbi, key, data, flags) }
+        })?
     }
 
     /// Returns a buffer which can be used to write a value into the item at the
@@ -589,16 +382,12 @@ impl Transaction<RW> {
         flags: WriteFlags,
     ) -> MdbxResult<&mut [u8]> {
         let key = key.as_ref();
-        let key_val: ffi::MDBX_val =
-            ffi::MDBX_val { iov_len: key.len(), iov_base: key.as_ptr() as *mut c_void };
-        let mut data_val: ffi::MDBX_val =
-            ffi::MDBX_val { iov_len: len, iov_base: ptr::null_mut::<c_void>() };
-        unsafe {
-            mdbx_result(self.txn_execute(|txn| {
-                ffi::mdbx_put(txn, dbi, &key_val, &mut data_val, flags.bits() | ffi::MDBX_RESERVE)
-            })?)?;
-            Ok(slice::from_raw_parts_mut(data_val.iov_base as *mut u8, data_val.iov_len))
-        }
+        let ptr = self.txn_execute(|txn| {
+            // SAFETY: txn is a valid RW transaction pointer from txn_execute.
+            unsafe { ops::reserve_raw(txn, dbi, key, len, flags) }
+        })??;
+        // SAFETY: ptr is valid from reserve_raw, len matches.
+        Ok(unsafe { ops::slice_from_reserved(ptr, len) })
     }
 
     /// Reserves space for a value of the given length at the given key, and
@@ -635,29 +424,18 @@ impl Transaction<RW> {
         data: Option<&[u8]>,
     ) -> MdbxResult<bool> {
         let key = key.as_ref();
-        let key_val: ffi::MDBX_val =
-            ffi::MDBX_val { iov_len: key.len(), iov_base: key.as_ptr() as *mut c_void };
-        let data_val: Option<ffi::MDBX_val> = data.map(|data| ffi::MDBX_val {
-            iov_len: data.len(),
-            iov_base: data.as_ptr() as *mut c_void,
-        });
-
-        mdbx_result({
-            let ptr = data_val.as_ref().map_or(ptr::null(), |d| d as *const ffi::MDBX_val);
-            self.txn_execute(|txn| unsafe { ffi::mdbx_del(txn, dbi, &key_val, ptr) })?
-        })
-        .map(|_| true)
-        .or_else(|e| match e {
-            MdbxError::NotFound => Ok(false),
-            other => Err(other),
-        })
+        self.txn_execute(|txn| {
+            // SAFETY: txn is a valid RW transaction pointer from txn_execute.
+            unsafe { ops::del_raw(txn, dbi, key, data) }
+        })?
     }
 
     /// Empties the given database. All items will be removed.
     pub fn clear_db(&self, dbi: ffi::MDBX_dbi) -> MdbxResult<()> {
-        mdbx_result(self.txn_execute(|txn| unsafe { ffi::mdbx_drop(txn, dbi, false) })?)?;
-
-        Ok(())
+        self.txn_execute(|txn| {
+            // SAFETY: txn is a valid RW transaction pointer from txn_execute.
+            unsafe { ops::clear_db_raw(txn, dbi) }
+        })?
     }
 
     /// Drops the database from the environment.
@@ -666,7 +444,11 @@ impl Transaction<RW> {
     /// Caller must close ALL other [Database] and [Cursor] instances pointing
     /// to the same dbi BEFORE calling this function.
     pub unsafe fn drop_db(&self, dbi: ffi::MDBX_dbi) -> MdbxResult<()> {
-        mdbx_result(self.txn_execute(|txn| unsafe { ffi::mdbx_drop(txn, dbi, true) })?)?;
+        self.txn_execute(|txn| {
+            // SAFETY: txn is a valid RW transaction pointer, caller ensures
+            // no other references to dbi exist.
+            unsafe { ops::drop_db_raw(txn, dbi) }
+        })??;
 
         self.inner.db_cache.remove_dbi(dbi);
 
@@ -675,13 +457,35 @@ impl Transaction<RW> {
 }
 
 impl Transaction<RO> {
+    pub(crate) fn new(env: Environment) -> MdbxResult<Self> {
+        let mut txn: *mut ffi::MDBX_txn = ptr::null_mut();
+        unsafe {
+            mdbx_result(ffi::mdbx_txn_begin_ex(
+                env.env_ptr(),
+                ptr::null_mut(),
+                RO::OPEN_FLAGS,
+                &mut txn,
+                ptr::null_mut(),
+            ))?;
+        }
+        let this = Self::new_from_ptr(env, txn);
+
+        #[cfg(feature = "read-tx-timeouts")]
+        this.env().txn_manager().add_active_read_transaction(txn, this.inner.ptr.clone());
+
+        Ok(this)
+    }
+
     /// Closes the database handle.
     ///
     /// # Safety
-    /// Caller must close ALL other [Database] and [Cursor] instances pointing to the same dbi
-    /// BEFORE calling this function.
+    ///
+    /// This will invalidate data cached in [`Database`] instances, and may
+    /// result in bad behavior when using those instances after calling this
+    /// function.
     pub unsafe fn close_db(&self, dbi: ffi::MDBX_dbi) -> MdbxResult<()> {
-        mdbx_result(unsafe { ffi::mdbx_dbi_close(self.env().env_ptr(), dbi) })?;
+        // SAFETY: Caller ensures the database is not in use.
+        unsafe { ops::close_db_raw(self.env().env_ptr(), dbi) }?;
 
         self.inner.db_cache.remove_dbi(dbi);
 
@@ -692,116 +496,19 @@ impl Transaction<RO> {
 impl Transaction<RW> {
     /// Begins a new nested transaction inside of this transaction.
     pub fn begin_nested_txn(&mut self) -> MdbxResult<Self> {
-        if self.inner.env.is_write_map() {
+        if self.inner.ptr.env().is_write_map() {
             return Err(MdbxError::NestedTransactionsUnsupportedWithWriteMap);
         }
         self.txn_execute(|txn| {
             let (tx, rx) = sync_channel(0);
             self.env().txn_manager().send_message(TxnManagerMessage::Begin {
-                parent: TxnPtr(txn),
+                parent: RawTxPtr(txn),
                 flags: RW::OPEN_FLAGS,
                 sender: tx,
             });
 
             rx.recv().unwrap().map(|ptr| Self::new_from_ptr(self.env().clone(), ptr.0))
         })?
-    }
-}
-
-/// A shareable pointer to an MDBX transaction.
-#[derive(Debug, Clone)]
-pub(crate) struct TransactionPtr {
-    txn: *mut ffi::MDBX_txn,
-    #[cfg(feature = "read-tx-timeouts")]
-    timed_out: Arc<AtomicBool>,
-    lock: Arc<Mutex<()>>,
-}
-
-impl TransactionPtr {
-    fn new(txn: *mut ffi::MDBX_txn) -> Self {
-        Self {
-            txn,
-            #[cfg(feature = "read-tx-timeouts")]
-            timed_out: Arc::new(AtomicBool::new(false)),
-            lock: Arc::new(Mutex::new(())),
-        }
-    }
-
-    /// Returns `true` if the transaction is timed out.
-    ///
-    /// When transaction is timed out via `TxnManager`, it's actually reset using
-    /// `mdbx_txn_reset`. It makes the transaction unusable (MDBX fails on any usages of such
-    /// transactions).
-    ///
-    /// Importantly, we can't rely on `MDBX_TXN_FINISHED` flag to check if the transaction is timed
-    /// out using `mdbx_txn_reset`, because MDBX uses it in other cases too.
-    #[cfg(feature = "read-tx-timeouts")]
-    fn is_timed_out(&self) -> bool {
-        self.timed_out.load(std::sync::atomic::Ordering::SeqCst)
-    }
-
-    #[cfg(feature = "read-tx-timeouts")]
-    pub(crate) fn set_timed_out(&self) {
-        self.timed_out.store(true, std::sync::atomic::Ordering::SeqCst);
-    }
-
-    /// Acquires the inner transaction lock to guarantee exclusive access to the transaction
-    /// pointer.
-    fn lock(&self) -> MutexGuard<'_, ()> {
-        if let Some(lock) = self.lock.try_lock() {
-            lock
-        } else {
-            tracing::trace!(
-                target: "libmdbx",
-                txn = %self.txn as usize,
-                backtrace = %std::backtrace::Backtrace::capture(),
-                "Transaction lock is already acquired, blocking...
-                To display the full backtrace, run with `RUST_BACKTRACE=full` env variable."
-            );
-            self.lock.lock()
-        }
-    }
-
-    /// Executes the given closure once the lock on the transaction is acquired.
-    ///
-    /// Returns the result of the closure or an error if the transaction is
-    /// timed out.
-    #[inline]
-    pub(crate) fn txn_execute_fail_on_timeout<F, T>(&self, f: F) -> MdbxResult<T>
-    where
-        F: FnOnce(*mut ffi::MDBX_txn) -> T,
-    {
-        let _lck = self.lock();
-
-        // No race condition with the `TxnManager` timing out the transaction
-        // is possible here, because we're taking a lock for any actions on the
-        // transaction pointer, including a call to the `mdbx_txn_reset`.
-        #[cfg(feature = "read-tx-timeouts")]
-        if self.is_timed_out() {
-            return Err(MdbxError::ReadTransactionTimeout);
-        }
-
-        Ok((f)(self.txn))
-    }
-
-    /// Executes the given closure once the lock on the transaction is
-    /// acquired. If the transaction is timed out, it will be renewed first.
-    ///
-    /// Returns the result of the closure or an error if the transaction renewal fails.
-    #[inline]
-    pub(crate) fn txn_execute_renew_on_timeout<F, T>(&self, f: F) -> MdbxResult<T>
-    where
-        F: FnOnce(*mut ffi::MDBX_txn) -> T,
-    {
-        let _lck = self.lock();
-
-        // To be able to do any operations on the transaction, we need to renew it first.
-        #[cfg(feature = "read-tx-timeouts")]
-        if self.is_timed_out() {
-            mdbx_result(unsafe { ffi::mdbx_txn_renew(self.txn) })?;
-        }
-
-        Ok((f)(self.txn))
     }
 }
 
@@ -884,10 +591,10 @@ impl CommitLatency {
 }
 
 // SAFETY: Access to the transaction is synchronized by the lock.
-unsafe impl Send for TransactionPtr {}
+unsafe impl<K: TransactionKind> Send for PtrSync<K> {}
 
 // SAFETY: Access to the transaction is synchronized by the lock.
-unsafe impl Sync for TransactionPtr {}
+unsafe impl<K: TransactionKind> Sync for PtrSync<K> {}
 
 #[cfg(test)]
 mod tests {

@@ -3,6 +3,16 @@
 Include updates to the notes here if you discover important details while
 working, or if the notes become outdated.
 
+## Current TODOs:
+
+Update these when we identify new TODOs while working on the crate. Remove them
+we when complete them.
+
+- [ ] Make the new Ro transaction automatically renew itself when it has
+      expired.
+  - [ ] think of something better than the current RO guard.
+- [ ] adapt cursors for new transaction api
+
 ## Crate Overview
 
 Rust bindings for libmdbx (MDBX database). Crate name: `signet-libmdbx`.

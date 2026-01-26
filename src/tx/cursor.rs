@@ -149,21 +149,32 @@ where
         let key_ptr = key_val.iov_base;
         let data_ptr = data_val.iov_base;
 
-        self.txn.txn_execute(|_txn| {
-            let v = mdbx_result(unsafe {
-                ffi::mdbx_cursor_get(self.cursor, &mut key_val, &mut data_val, op)
-            })?;
-            assert_ne!(data_ptr, data_val.iov_base);
-            let key_out = {
-                // MDBX wrote in new key
-                if ptr::eq(key_ptr, key_val.iov_base) {
-                    None
-                } else {
-                    Some(Key::decode_val::<K>(self.txn, key_val)?)
-                }
-            };
-            let data_out = Value::decode_val::<K>(self.txn, data_val)?;
-            Ok((key_out, data_out, v))
+        self.txn.txn_execute(|txn| {
+            // SAFETY:
+            // The cursor is valid as long as self is alive.
+            // The transaction is also valid as long as self is alive.
+            // The data in key_val and data_val is valid as long as the
+            // transaction is alive, provided the page is not dirty.
+            // decode_val checks for dirty pages and copies data if needed.
+            unsafe {
+                let v = mdbx_result(ffi::mdbx_cursor_get(
+                    self.cursor,
+                    &mut key_val,
+                    &mut data_val,
+                    op,
+                ))?;
+                assert_ne!(data_ptr, data_val.iov_base);
+                let key_out = {
+                    // MDBX wrote in new key
+                    if ptr::eq(key_ptr, key_val.iov_base) {
+                        None
+                    } else {
+                        Some(Key::decode_val::<K>(txn, key_val)?)
+                    }
+                };
+                let data_out = Value::decode_val::<K>(txn, data_val)?;
+                Ok((key_out, data_out, v))
+            }
         })?
     }
 
@@ -649,8 +660,11 @@ where
     K: TransactionKind,
 {
     fn drop(&mut self) {
-        // To be able to close a cursor of a timed out transaction, we need to renew it first.
-        // Hence the usage of `txn_execute_renew_on_timeout` here.
+        // MDBX cursors MUST be closed. Failure to do so is a memory leak.
+        //
+        // To be able to close a cursor of a timed out transaction, we need to
+        // renew it first. Hence the usage of `txn_execute_renew_on_timeout`
+        // here.
         let _ = self
             .txn
             .txn_execute_renew_on_timeout(|_| unsafe { ffi::mdbx_cursor_close(self.cursor) });

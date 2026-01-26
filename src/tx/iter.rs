@@ -186,26 +186,6 @@ where
     pub fn from_owned_with(cursor: Cursor<'tx, K>, first: (Key, Value)) -> Self {
         Self::new_with(Cow::Owned(cursor), first)
     }
-
-    /// Execute the MDBX operation.
-    ///
-    /// Returns `Ok(true)` if a key/value pair was found, `Ok(false)` if no more
-    /// key/value pairs are available, or `Err` on error.
-    fn execute_op(
-        &self,
-        key: &mut ffi::MDBX_val,
-        data: &mut ffi::MDBX_val,
-    ) -> Result<bool, MdbxError> {
-        self.cursor.txn().txn_execute(|_tx| {
-            let res = unsafe { ffi::mdbx_cursor_get(self.cursor.cursor(), key, data, OP) };
-
-            match res {
-                ffi::MDBX_SUCCESS => Ok(true),
-                ffi::MDBX_NOTFOUND | ffi::MDBX_ENODATA | ffi::MDBX_RESULT_TRUE => Ok(false),
-                _ => mdbx_result(res).map(|_| false),
-            }
-        })?
-    }
 }
 
 impl<K, Key, Value, const OP: u32> Iter<'_, '_, K, Key, Value, OP>
@@ -215,11 +195,7 @@ where
     Value: TableObjectOwned,
 {
     /// Own the next key/value pair from the iterator.
-    pub fn owned_next(&mut self) -> ReadResult<Option<(Key, Value)>>
-    where
-        Key: TableObjectOwned,
-        Value: TableObjectOwned,
-    {
+    pub fn owned_next(&mut self) -> ReadResult<Option<(Key, Value)>> {
         match self.state {
             IterState::Active => {}
             IterState::End => return Ok(None),
@@ -233,21 +209,13 @@ where
             }
         }
 
-        // If we're Active, proceed to fetch the next item.
-        let mut key = ffi::MDBX_val { iov_len: 0, iov_base: ptr::null_mut() };
-        let mut data = ffi::MDBX_val { iov_len: 0, iov_base: ptr::null_mut() };
-
-        // Modify the memory, then check the result. True if modified, false if
-        // no more items.
-        if !self.execute_op(&mut key, &mut data)? {
-            self.state = IterState::End;
-            return Ok(None);
+        match self.execute_op()? {
+            Some(kv) => Ok(Some(kv)),
+            None => {
+                self.state = IterState::End;
+                Ok(None)
+            }
         }
-
-        let key = TableObject::decode_val::<K>(self.cursor.txn(), key)?;
-        let data = TableObject::decode_val::<K>(self.cursor.txn(), data)?;
-
-        Ok(Some((key, data)))
     }
 }
 
@@ -257,13 +225,40 @@ where
     Key: TableObject<'tx>,
     Value: TableObject<'tx>,
 {
+    /// Execute the MDBX operation and decode the result.
+    ///
+    /// Returns `Ok(Some((key, value)))` if a key/value pair was found,
+    /// `Ok(None)` if no more key/value pairs are available, or `Err` on error.
+    fn execute_op(&self) -> ReadResult<Option<(Key, Value)>> {
+        let mut key = ffi::MDBX_val { iov_len: 0, iov_base: ptr::null_mut() };
+        let mut data = ffi::MDBX_val { iov_len: 0, iov_base: ptr::null_mut() };
+
+        self.cursor.txn().txn_execute(|txn| {
+            let res =
+                unsafe { ffi::mdbx_cursor_get(self.cursor.cursor(), &mut key, &mut data, OP) };
+
+            match res {
+                ffi::MDBX_SUCCESS => {
+                    // SAFETY: decode_val checks for dirty writes and copies if needed.
+                    // The lifetime 'tx guarantees the Cow cannot outlive the transaction.
+                    unsafe {
+                        let key = TableObject::decode_val::<K>(txn, key)?;
+                        let data = TableObject::decode_val::<K>(txn, data)?;
+                        Ok(Some((key, data)))
+                    }
+                }
+                ffi::MDBX_NOTFOUND | ffi::MDBX_ENODATA | ffi::MDBX_RESULT_TRUE => Ok(None),
+                other => Err(MdbxError::from_err_code(other).into()),
+            }
+        })?
+    }
+
     /// Borrow the next key/value pair from the iterator.
     ///
     /// Returns `Ok(Some((key, value)))` if a key/value pair was found,
     /// `Ok(None)` if no more key/value pairs are available, or `Err` on DB
     /// access error.
     pub fn borrow_next(&mut self) -> ReadResult<Option<(Key, Value)>> {
-        // Check the state first. States are ordered from most to least common.
         match self.state {
             IterState::Active => {}
             IterState::End => return Ok(None),
@@ -277,21 +272,13 @@ where
             }
         }
 
-        // If we're Active, proceed to fetch the next item.
-        let mut key = ffi::MDBX_val { iov_len: 0, iov_base: ptr::null_mut() };
-        let mut data = ffi::MDBX_val { iov_len: 0, iov_base: ptr::null_mut() };
-
-        // Modify the memory, then check the result. True if modified, false if
-        // no more items.
-        if !self.execute_op(&mut key, &mut data)? {
-            self.state = IterState::End;
-            return Ok(None);
+        match self.execute_op()? {
+            Some(kv) => Ok(Some(kv)),
+            None => {
+                self.state = IterState::End;
+                Ok(None)
+            }
         }
-
-        let key = TableObject::decode_val::<K>(self.cursor.txn(), key)?;
-        let data = TableObject::decode_val::<K>(self.cursor.txn(), data)?;
-
-        Ok(Some((key, data)))
     }
 }
 

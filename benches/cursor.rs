@@ -15,7 +15,7 @@ fn bench_get_seq_iter(c: &mut Criterion) {
     // Note: setup_bench_db creates a named database which adds metadata to the
     // main database, so actual item count is n + 1
     let actual_items = n + 1;
-    c.bench_function("bench_get_seq_iter", |b| {
+    c.bench_function("cursor::traverse::iter_x3", |b| {
         b.iter(|| {
             let mut cursor = txn.cursor(db).unwrap();
             let mut i = 0;
@@ -60,7 +60,7 @@ fn bench_get_seq_cursor(c: &mut Criterion) {
     // Note: setup_bench_db creates a named database which adds metadata to the
     // main database, so actual item count is n + 1
     let actual_items = n + 1;
-    c.bench_function("bench_get_seq_cursor", |b| {
+    c.bench_function("cursor::traverse::iter", |b| {
         b.iter(|| {
             let (i, count) = txn
                 .cursor(db)
@@ -91,7 +91,7 @@ fn bench_get_seq_raw(c: &mut Criterion) {
     // main database, so actual item count is n + 1
     let actual_items = n + 1;
 
-    c.bench_function("bench_get_seq_raw", |b| {
+    c.bench_function("cursor::traverse::raw", |b| {
         b.iter(|| unsafe {
             txn.txn_execute(|txn| {
                 mdbx_cursor_open(txn, dbi, &raw mut cursor);

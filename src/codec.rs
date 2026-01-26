@@ -1,5 +1,5 @@
-use crate::error::ReadResult;
-use crate::{MdbxError, Transaction, TransactionKind};
+use crate::{MdbxError, TransactionKind, error::ReadResult, tx::ops};
+use ffi::MDBX_txn;
 use std::{borrow::Cow, slice};
 
 /// A marker trait for types that can be deserialized from a database value
@@ -34,9 +34,10 @@ impl<T> TableObjectOwned for T where T: for<'de> TableObject<'de> {}
 ///
 /// # Implementation Guide
 ///
-/// For most types, only implement [`decode_borrow`](Self::decode_borrow). The
-/// default implementation of [`decode_val`](Self::decode_val) will call
-/// `decode_borrow` with the raw ffi bytes, and is easy to misuse.
+/// For most types, only implement [`decode_borrow`](Self::decode_borrow). An
+/// internal function `decode_val` is provided to handle zero-copy borrowing.
+/// Implementing it is STRONGLY DISCOURAGED. Zero-copy borrowing can be
+/// achieved by implementing `decode_borrow`.
 ///
 /// ## Zero-copy Deserialization
 ///
@@ -122,19 +123,23 @@ pub trait TableObject<'a>: Sized {
     /// This method is used internally to optimize deserialization for types
     /// that borrow data directly from the database (like `Cow<'a, [u8]>`).
     ///
-    /// # Safety Considerations
+    /// # Safety
     ///
     /// The data pointed to by `data_val` is only valid for the lifetime of
     /// the transaction. In read-write transactions, the data may be "dirty"
     /// (modified but not yet committed), requiring a copy via `mdbx_is_dirty`
     /// before borrowing.
+    ///
+    /// The caller must ensure that `tx` is a valid pointer to the current
+    /// transaction AND that `data_val` points to valid MDBX data AND that
+    /// they have exclusive access to the transaction if it is read-write.
     #[doc(hidden)]
     #[inline(always)]
-    fn decode_val<K: TransactionKind>(
-        tx: &'a Transaction<K>,
+    unsafe fn decode_val<K: TransactionKind>(
+        tx: *const MDBX_txn,
         data_val: ffi::MDBX_val,
     ) -> ReadResult<Self> {
-        let cow = Cow::<'a, [u8]>::decode_val::<K>(tx, data_val)?;
+        let cow = unsafe { Cow::<'a, [u8]>::decode_val::<K>(tx, data_val)? };
         Self::decode_borrow(cow)
     }
 }
@@ -145,26 +150,17 @@ impl<'a> TableObject<'a> for Cow<'a, [u8]> {
     }
 
     #[doc(hidden)]
-    fn decode_val<K: TransactionKind>(
-        _txn: &'a Transaction<K>,
+    unsafe fn decode_val<K: TransactionKind>(
+        txn: *const MDBX_txn,
         data_val: ffi::MDBX_val,
     ) -> ReadResult<Self> {
+        // SAFETY: data_val is valid from caller, slice is valid for lifetime 'a.
         let s = unsafe { slice::from_raw_parts(data_val.iov_base as *const u8, data_val.iov_len) };
 
-        #[cfg(feature = "return-borrowed")]
-        {
-            Ok(Cow::Borrowed(s))
-        }
+        // SAFETY: txn is valid from caller, data_val.iov_base points to db pages.
+        let is_dirty = (!K::IS_READ_ONLY) && unsafe { ops::is_dirty_raw(txn, data_val.iov_base) }?;
 
-        #[cfg(not(feature = "return-borrowed"))]
-        {
-            let is_dirty = (!K::IS_READ_ONLY)
-                && crate::error::mdbx_result(unsafe {
-                    ffi::mdbx_is_dirty(_txn.txn(), data_val.iov_base)
-                })?;
-
-            Ok(if is_dirty { Cow::Owned(s.to_vec()) } else { Cow::Borrowed(s) })
-        }
+        Ok(if is_dirty { Cow::Owned(s.to_vec()) } else { Cow::Borrowed(s) })
     }
 }
 
@@ -179,7 +175,10 @@ impl<'a> TableObject<'a> for () {
         Ok(())
     }
 
-    fn decode_val<K: TransactionKind>(_: &'a Transaction<K>, _: ffi::MDBX_val) -> ReadResult<Self> {
+    unsafe fn decode_val<K: TransactionKind>(
+        _: *const MDBX_txn,
+        _: ffi::MDBX_val,
+    ) -> ReadResult<Self> {
         Ok(())
     }
 }

@@ -2,7 +2,7 @@ use crate::{
     Database, Mode, RO, RW, SyncMode, Transaction, TransactionKind,
     error::{MdbxError, MdbxResult, ReadResult, mdbx_result},
     flags::EnvironmentFlags,
-    sys::txn_manager::{TxnManager, TxnManagerMessage, TxnPtr},
+    sys::txn_manager::{RawTxPtr, TxnManager, TxnManagerMessage},
 };
 use byteorder::{ByteOrder, NativeEndian};
 use mem::size_of;
@@ -95,17 +95,18 @@ impl Environment {
     /// Create a read-only transaction for use with the environment.
     #[inline]
     pub fn begin_ro_txn(&self) -> MdbxResult<Transaction<RO>> {
-        Transaction::new(self.clone())
+        Transaction::<RO>::new(self.clone())
     }
 
-    /// Create a read-write transaction for use with the environment. This method will block while
-    /// there are any other read-write transactions open on the environment.
+    /// Create a read-write transaction for use with the environment. This
+    /// method will block while there are any other read-write transactions
+    /// open on the environment.
     pub fn begin_rw_txn(&self) -> MdbxResult<Transaction<RW>> {
         let mut warned = false;
         let txn = loop {
             let (tx, rx) = sync_channel(0);
             self.txn_manager().send_message(TxnManagerMessage::Begin {
-                parent: TxnPtr(ptr::null_mut()),
+                parent: RawTxPtr(ptr::null_mut()),
                 flags: RW::OPEN_FLAGS,
                 sender: tx,
             });
@@ -122,6 +123,46 @@ impl Environment {
             break res;
         }?;
         Ok(Transaction::new_from_ptr(self.clone(), txn.0))
+    }
+
+    /// Create a single-threaded read-only transaction for use with the
+    /// environment.
+    ///
+    /// The returned Tx is `!Sync`. As a result, it saves about 30% overhead on
+    /// transaction operations compared to the multi-threaded version, but
+    /// cannot be sent or shared between threads.
+    ///
+    /// If the [`read-tx-timeouts`] feature is enabled, the transaction will
+    /// have a default timeout applied.
+    pub fn begin_ro_single_thread(&self) -> MdbxResult<crate::tx::transaction_2::Transaction<RO>> {
+        crate::tx::transaction_2::Transaction::<RO>::new(self.clone())
+    }
+
+    /// Create a single-threaded read-write transaction for use with the
+    /// environment. This method will block while there are any other read-write
+    /// transactions open on the environment.
+    ///
+    /// The returned Tx is `!Send` and `!Sync`. As a result, it saves about 30%
+    /// overhead on transaction operations compared to the multi-threaded
+    /// version, but cannot be sent or shared between threads.
+    pub fn begin_rw_single_thread(&self) -> MdbxResult<crate::tx::transaction_2::Transaction<RW>> {
+        crate::tx::transaction_2::Transaction::<RW>::new(self.clone())
+    }
+
+    /// Create a single-threaded read-only transaction without a timeout for use
+    /// with the environment.
+    ///
+    /// The returned Tx is `!Sync`. As a result, it saves about 30% overhead on
+    /// transaction operations compared to the multi-threaded version, but
+    /// cannot be sent or shared between threads.
+    ///
+    /// Instantiating a read-only transaction without a timeout is not
+    /// recommended, as it may lead to resource exhaustion if done excessively.
+    #[cfg(feature = "read-tx-timeouts")]
+    pub fn begin_ro_single_thread_no_timeout(
+        &self,
+    ) -> MdbxResult<crate::tx::transaction_2::Transaction<RO>> {
+        todo!()
     }
 
     /// Returns a raw pointer to the underlying MDBX environment.

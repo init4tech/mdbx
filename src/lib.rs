@@ -136,7 +136,7 @@ pub use sys::{
     HandleSlowReadersReturnCode, Info, PageSize, Stat,
 };
 
-mod tx;
+pub mod tx;
 pub use tx::{CommitLatency, Cursor, Database, RO, RW, Transaction, TransactionKind, iter};
 
 #[cfg(test)]

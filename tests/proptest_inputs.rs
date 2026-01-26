@@ -725,3 +725,471 @@ proptest! {
         let _ = txn.put(db.dbi(), &large_key, &value, WriteFlags::empty());
     }
 }
+
+// =============================================================================
+// Correctness: Round-trip - TxSync (V1)
+// =============================================================================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    /// Test that put followed by get returns the same value (V1).
+    #[test]
+    fn roundtrip_correctness_v1(key in arb_safe_key(), value in arb_bytes()) {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+        let txn = env.begin_rw_txn().unwrap();
+        let db = txn.open_db(None).unwrap();
+
+        let put_result = txn.put(db.dbi(), &key, &value, WriteFlags::empty());
+        if put_result.is_ok() {
+            let retrieved: Option<Vec<u8>> = txn.get(db.dbi(), &key).unwrap();
+            prop_assert_eq!(retrieved, Some(value));
+        }
+    }
+}
+
+// =============================================================================
+// Correctness: Round-trip - TxUnsync (V2)
+// =============================================================================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    /// Test that put followed by get returns the same value (V2).
+    #[test]
+    fn roundtrip_correctness_v2(key in arb_safe_key(), value in arb_bytes()) {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+        let mut txn = env.begin_rw_unsync().unwrap();
+        let db = txn.open_db(None).unwrap();
+
+        let put_result = txn.put(db.dbi(), &key, &value, WriteFlags::empty());
+        if put_result.is_ok() {
+            let retrieved: Option<Vec<u8>> = txn.get(db.dbi(), &key).unwrap();
+            prop_assert_eq!(retrieved, Some(value));
+        }
+    }
+}
+
+// =============================================================================
+// Correctness: Overwrite - TxSync (V1)
+// =============================================================================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    /// Test that overwriting a key returns the new value (V1).
+    #[test]
+    fn overwrite_correctness_v1(
+        key in arb_safe_key(),
+        value1 in arb_bytes(),
+        value2 in arb_bytes(),
+    ) {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+        let txn = env.begin_rw_txn().unwrap();
+        let db = txn.open_db(None).unwrap();
+
+        let put1 = txn.put(db.dbi(), &key, &value1, WriteFlags::empty());
+        let put2 = txn.put(db.dbi(), &key, &value2, WriteFlags::empty());
+
+        if put1.is_ok() && put2.is_ok() {
+            let retrieved: Option<Vec<u8>> = txn.get(db.dbi(), &key).unwrap();
+            prop_assert_eq!(retrieved, Some(value2));
+        }
+    }
+}
+
+// =============================================================================
+// Correctness: Overwrite - TxUnsync (V2)
+// =============================================================================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    /// Test that overwriting a key returns the new value (V2).
+    #[test]
+    fn overwrite_correctness_v2(
+        key in arb_safe_key(),
+        value1 in arb_bytes(),
+        value2 in arb_bytes(),
+    ) {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+        let mut txn = env.begin_rw_unsync().unwrap();
+        let db = txn.open_db(None).unwrap();
+
+        let put1 = txn.put(db.dbi(), &key, &value1, WriteFlags::empty());
+        let put2 = txn.put(db.dbi(), &key, &value2, WriteFlags::empty());
+
+        if put1.is_ok() && put2.is_ok() {
+            let retrieved: Option<Vec<u8>> = txn.get(db.dbi(), &key).unwrap();
+            prop_assert_eq!(retrieved, Some(value2));
+        }
+    }
+}
+
+// =============================================================================
+// Correctness: Delete - TxSync (V1)
+// =============================================================================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    /// Test that delete removes the key and get returns None (V1).
+    #[test]
+    fn delete_correctness_v1(key in arb_safe_key(), value in arb_bytes()) {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+        let txn = env.begin_rw_txn().unwrap();
+        let db = txn.open_db(None).unwrap();
+
+        let put_result = txn.put(db.dbi(), &key, &value, WriteFlags::empty());
+        if put_result.is_ok() {
+            let deleted = txn.del(db.dbi(), &key, None).unwrap();
+            prop_assert!(deleted);
+
+            let retrieved: Option<Vec<u8>> = txn.get(db.dbi(), &key).unwrap();
+            prop_assert_eq!(retrieved, None);
+        }
+    }
+}
+
+// =============================================================================
+// Correctness: Delete - TxUnsync (V2)
+// =============================================================================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    /// Test that delete removes the key and get returns None (V2).
+    #[test]
+    fn delete_correctness_v2(key in arb_safe_key(), value in arb_bytes()) {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+        let mut txn = env.begin_rw_unsync().unwrap();
+        let db = txn.open_db(None).unwrap();
+
+        let put_result = txn.put(db.dbi(), &key, &value, WriteFlags::empty());
+        if put_result.is_ok() {
+            let deleted = txn.del(db.dbi(), &key, None).unwrap();
+            prop_assert!(deleted);
+
+            let retrieved: Option<Vec<u8>> = txn.get(db.dbi(), &key).unwrap();
+            prop_assert_eq!(retrieved, None);
+        }
+    }
+}
+
+// =============================================================================
+// Correctness: DUP_SORT Values - TxSync (V1)
+// =============================================================================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(128))]
+
+    /// Test that all unique DUP_SORT values are retrievable via iter_dup_of (V1).
+    #[test]
+    fn dupsort_values_correctness_v1(
+        key in arb_small_bytes(),
+        values in prop::collection::vec(arb_small_bytes(), 1..10),
+    ) {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+        let txn = env.begin_rw_txn().unwrap();
+        let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
+
+        // Insert all values
+        let mut inserted: Vec<Vec<u8>> = Vec::new();
+        for value in &values {
+            if txn.put(db.dbi(), &key, value, WriteFlags::empty()).is_ok()
+                && !inserted.contains(value)
+            {
+                inserted.push(value.clone());
+            }
+        }
+
+        // Skip if nothing was inserted
+        prop_assume!(!inserted.is_empty());
+
+        // Retrieve all values via iter_dup_of
+        let mut cursor = txn.cursor(db).unwrap();
+        let retrieved: Vec<Vec<u8>> = cursor
+            .iter_dup_of::<Vec<u8>, Vec<u8>>(&key)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|(_, v)| v)
+            .collect();
+
+        // All inserted values should be retrieved (order is sorted by MDBX)
+        inserted.sort();
+        let mut retrieved_sorted = retrieved.clone();
+        retrieved_sorted.sort();
+        prop_assert_eq!(inserted, retrieved_sorted);
+    }
+}
+
+// =============================================================================
+// Correctness: DUP_SORT Values - TxUnsync (V2)
+// =============================================================================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(128))]
+
+    /// Test that all unique DUP_SORT values are retrievable via iter_dup_of (V2).
+    #[test]
+    fn dupsort_values_correctness_v2(
+        key in arb_small_bytes(),
+        values in prop::collection::vec(arb_small_bytes(), 1..10),
+    ) {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+        let mut txn = env.begin_rw_unsync().unwrap();
+        let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
+
+        let mut inserted: Vec<Vec<u8>> = Vec::new();
+        for value in &values {
+            if txn.put(db.dbi(), &key, value, WriteFlags::empty()).is_ok()
+                && !inserted.contains(value)
+            {
+                inserted.push(value.clone());
+            }
+        }
+
+        prop_assume!(!inserted.is_empty());
+
+        let mut cursor = txn.cursor(db).unwrap();
+        let retrieved: Vec<Vec<u8>> = cursor
+            .iter_dup_of::<Vec<u8>, Vec<u8>>(&key)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|(_, v)| v)
+            .collect();
+
+        inserted.sort();
+        let mut retrieved_sorted = retrieved.clone();
+        retrieved_sorted.sort();
+        prop_assert_eq!(inserted, retrieved_sorted);
+    }
+}
+
+// =============================================================================
+// Correctness: Iteration Order - TxSync (V1)
+// =============================================================================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(128))]
+
+    /// Test that keys are returned in lexicographically sorted order (V1).
+    #[test]
+    fn iteration_order_correctness_v1(
+        entries in prop::collection::vec((arb_safe_key(), arb_bytes()), 1..20),
+    ) {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+        let txn = env.begin_rw_txn().unwrap();
+        let db = txn.open_db(None).unwrap();
+
+        // Insert all entries
+        let mut inserted_keys: Vec<Vec<u8>> = Vec::new();
+        for (key, value) in &entries {
+            if txn.put(db.dbi(), key, value, WriteFlags::empty()).is_ok()
+                && !inserted_keys.contains(key)
+            {
+                inserted_keys.push(key.clone());
+            }
+        }
+
+        prop_assume!(!inserted_keys.is_empty());
+
+        // Iterate and collect keys
+        let mut cursor = txn.cursor(db).unwrap();
+        let retrieved_keys: Vec<Vec<u8>> = cursor
+            .iter::<Vec<u8>, Vec<u8>>()
+            .filter_map(Result::ok)
+            .map(|(k, _)| k)
+            .collect();
+
+        // Keys should be in sorted order
+        let mut expected = inserted_keys;
+        expected.sort();
+        expected.dedup();
+        prop_assert_eq!(retrieved_keys, expected);
+    }
+}
+
+// =============================================================================
+// Correctness: Iteration Order - TxUnsync (V2)
+// =============================================================================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(128))]
+
+    /// Test that keys are returned in lexicographically sorted order (V2).
+    #[test]
+    fn iteration_order_correctness_v2(
+        entries in prop::collection::vec((arb_safe_key(), arb_bytes()), 1..20),
+    ) {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+        let mut txn = env.begin_rw_unsync().unwrap();
+        let db = txn.open_db(None).unwrap();
+
+        let mut inserted_keys: Vec<Vec<u8>> = Vec::new();
+        for (key, value) in &entries {
+            if txn.put(db.dbi(), key, value, WriteFlags::empty()).is_ok()
+                && !inserted_keys.contains(key)
+            {
+                inserted_keys.push(key.clone());
+            }
+        }
+
+        prop_assume!(!inserted_keys.is_empty());
+
+        let mut cursor = txn.cursor(db).unwrap();
+        let retrieved_keys: Vec<Vec<u8>> = cursor
+            .iter::<Vec<u8>, Vec<u8>>()
+            .filter_map(Result::ok)
+            .map(|(k, _)| k)
+            .collect();
+
+        let mut expected = inserted_keys;
+        expected.sort();
+        expected.dedup();
+        prop_assert_eq!(retrieved_keys, expected);
+    }
+}
+
+// =============================================================================
+// Correctness: Cursor Set - TxSync (V1)
+// =============================================================================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    /// Test that cursor.set returns the correct value when key exists (V1).
+    #[test]
+    fn cursor_set_correctness_v1(key in arb_safe_key(), value in arb_bytes()) {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+        let txn = env.begin_rw_txn().unwrap();
+        let db = txn.open_db(None).unwrap();
+
+        let put_result = txn.put(db.dbi(), &key, &value, WriteFlags::empty());
+        if put_result.is_ok() {
+            let mut cursor = txn.cursor(db).unwrap();
+            let retrieved: Option<Vec<u8>> = cursor.set(&key).unwrap();
+            prop_assert_eq!(retrieved, Some(value));
+        }
+    }
+}
+
+// =============================================================================
+// Correctness: Cursor Set - TxUnsync (V2)
+// =============================================================================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    /// Test that cursor.set returns the correct value when key exists (V2).
+    #[test]
+    fn cursor_set_correctness_v2(key in arb_safe_key(), value in arb_bytes()) {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+        let mut txn = env.begin_rw_unsync().unwrap();
+        let db = txn.open_db(None).unwrap();
+
+        let put_result = txn.put(db.dbi(), &key, &value, WriteFlags::empty());
+        if put_result.is_ok() {
+            let mut cursor = txn.cursor(db).unwrap();
+            let retrieved: Option<Vec<u8>> = cursor.set(&key).unwrap();
+            prop_assert_eq!(retrieved, Some(value));
+        }
+    }
+}
+
+// =============================================================================
+// Correctness: Cursor Set Range - TxSync (V1)
+// =============================================================================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(128))]
+
+    /// Test that cursor.set_range returns the first key >= search key (V1).
+    #[test]
+    fn cursor_set_range_correctness_v1(
+        entries in prop::collection::vec((arb_safe_key(), arb_bytes()), 2..10),
+        search_key in arb_safe_key(),
+    ) {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+        let txn = env.begin_rw_txn().unwrap();
+        let db = txn.open_db(None).unwrap();
+
+        let mut inserted: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+        for (key, value) in &entries {
+            if txn.put(db.dbi(), key, value, WriteFlags::empty()).is_ok() {
+                inserted.push((key.clone(), value.clone()));
+            }
+        }
+
+        prop_assume!(!inserted.is_empty());
+
+        // Sort by key to find expected result
+        inserted.sort_by(|a, b| a.0.cmp(&b.0));
+        inserted.dedup_by(|a, b| a.0 == b.0);
+
+        let expected = inserted
+            .iter()
+            .find(|(k, _)| k >= &search_key)
+            .cloned();
+
+        let mut cursor = txn.cursor(db).unwrap();
+        let result: Option<(Vec<u8>, Vec<u8>)> = cursor.set_range(&search_key).unwrap();
+
+        prop_assert_eq!(result, expected);
+    }
+}
+
+// =============================================================================
+// Correctness: Cursor Set Range - TxUnsync (V2)
+// =============================================================================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(128))]
+
+    /// Test that cursor.set_range returns the first key >= search key (V2).
+    #[test]
+    fn cursor_set_range_correctness_v2(
+        entries in prop::collection::vec((arb_safe_key(), arb_bytes()), 2..10),
+        search_key in arb_safe_key(),
+    ) {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+        let mut txn = env.begin_rw_unsync().unwrap();
+        let db = txn.open_db(None).unwrap();
+
+        let mut inserted: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+        for (key, value) in &entries {
+            if txn.put(db.dbi(), key, value, WriteFlags::empty()).is_ok() {
+                inserted.push((key.clone(), value.clone()));
+            }
+        }
+
+        prop_assume!(!inserted.is_empty());
+
+        inserted.sort_by(|a, b| a.0.cmp(&b.0));
+        inserted.dedup_by(|a, b| a.0 == b.0);
+
+        let expected = inserted
+            .iter()
+            .find(|(k, _)| k >= &search_key)
+            .cloned();
+
+        let mut cursor = txn.cursor(db).unwrap();
+        let result: Option<(Vec<u8>, Vec<u8>)> = cursor.set_range(&search_key).unwrap();
+
+        prop_assert_eq!(result, expected);
+    }
+}

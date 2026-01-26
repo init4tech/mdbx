@@ -299,6 +299,23 @@ where
     }
 }
 
+impl<K: TransactionKind> Drop for SyncInner<K> {
+    fn drop(&mut self) {
+        #[cfg(feature = "read-tx-timeouts")]
+        if K::IS_READ_ONLY {
+            // Remove from active read transactions before dropping PtrSync.
+            // This breaks the circular Arc reference: the map holds a PtrSync
+            // clone, so we must remove it before the final reference is dropped.
+            //
+            // SAFETY: Not performing any MDBX operation, just updating internal
+            // tracking state.
+            unsafe {
+                self.ptr.env().txn_manager().remove_active_read_transaction(self.ptr.txn_ptr());
+            }
+        }
+    }
+}
+
 impl TxSync<RW> {
     /// Opens a handle to an MDBX database, creating the database if necessary.
     ///

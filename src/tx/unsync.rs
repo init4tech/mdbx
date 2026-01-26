@@ -1,8 +1,17 @@
-//! Alternative transaction implementation using Arc/Weak pattern for RO
-//! transactions and direct ownership for RW transactions.
+//! Alternative transaction implementation that provide unsynchronized
+//! access for read-write transactions.
 //!
-//! This module provides a side-by-side implementation for comparison with the
-//! existing mutex-based transaction implementation.
+//! These transactions are significantly faster than synchronized transactions
+//! when used in a single-threaded context, as they avoid the overhead of
+//! mutexes locking. However, they are `!Sync` due to MDBX's thread
+//! requirements. The RW transactions are `!Send` and must be used on the
+//! creating thread, while RO transactions can be sent between threads but not
+//! shared concurrently.
+//!
+//! | Transaction Type | Send | Sync | MDBX Requirement              |
+//! |------------------|------|------|-------------------------------|
+//! | Read-Only (RO)   | Yes  | No   | Total ordering of access      |
+//! | Read-Write (RW)  | No   | No   | Single-threaded ownership     |
 //!
 //! # Design
 //!
@@ -21,7 +30,7 @@ use crate::{
     error::{MdbxResult, mdbx_result},
     flags::{DatabaseFlags, WriteFlags},
     tx::{
-        RoGuard, RwUnsync, TxPtrAccess,
+        Cursor, RoGuard, RwUnsync, TxPtrAccess,
         access::RoTxPtr,
         cache::{CachedDb, DbCache},
         ops,
@@ -48,7 +57,7 @@ impl fmt::Debug for TxMeta {
 /// This implementation uses:
 /// - Arc/Weak pattern for RO transactions (!Sync, with timeout support)
 /// - Direct ownership for RW transactions (!Send, !Sync, no mutex needed)
-pub struct Transaction<K: TransactionKind> {
+pub struct TxUnsync<K: TransactionKind> {
     txn: K::Inner,
 
     meta: TxMeta,
@@ -56,7 +65,7 @@ pub struct Transaction<K: TransactionKind> {
     _marker: PhantomData<K>,
 }
 
-impl<K: TransactionKind> Transaction<K> {
+impl<K: TransactionKind> TxUnsync<K> {
     fn new_inner(env: Environment) -> MdbxResult<(*mut ffi::MDBX_txn, TxMeta)> {
         let mut txn: *mut ffi::MDBX_txn = ptr::null_mut();
         // SAFETY: env.env_ptr() is valid, we check the result.
@@ -83,7 +92,7 @@ impl<K: TransactionKind> Transaction<K> {
     }
 }
 
-impl Transaction<RO> {
+impl TxUnsync<RO> {
     /// Creates the raw pointer and metadata from an environment.
     fn begin(env: Environment) -> MdbxResult<(RoTxPtr, TxMeta)> {
         let (txn, meta) = Self::new_inner(env)?;
@@ -111,7 +120,6 @@ impl Transaction<RO> {
 
     /// Creates a new read-only transaction without a timeout.
     #[cfg(feature = "read-tx-timeouts")]
-    #[allow(dead_code)]
     pub(crate) fn new_no_timeout(env: Environment) -> MdbxResult<Self> {
         let (ptr, meta) = Self::begin(env)?;
         Ok(Self::from_guard(RoGuard::new_no_timeout(ptr), meta))
@@ -134,7 +142,7 @@ impl Transaction<RO> {
     }
 }
 
-impl Transaction<RW> {
+impl TxUnsync<RW> {
     /// Creates a new read-write transaction.
     pub(crate) fn new(env: Environment) -> MdbxResult<Self> {
         let (txn, meta) = Self::new_inner(env)?;
@@ -145,7 +153,7 @@ impl Transaction<RW> {
     }
 }
 
-impl<K: TransactionKind> Transaction<K> {
+impl<K: TransactionKind> TxUnsync<K> {
     /// Gets the raw transaction pointer
     ///
     /// This transaction takes &mut self to ensure exclusive access. This
@@ -251,6 +259,15 @@ impl<K: TransactionKind> Transaction<K> {
         })?
     }
 
+    /// Opens a cursor on the given database.
+    ///
+    /// Multiple cursors can be open simultaneously on different databases
+    /// within the same transaction. The cursor borrows the transaction's
+    /// inner access type, allowing concurrent cursor operations.
+    pub fn cursor(&self, db: Database) -> MdbxResult<Cursor<'_, K, K::Inner>> {
+        Cursor::new(&self.txn, db)
+    }
+
     /// Commits the transaction (inner implementation).
     fn commit_inner(mut self, latency: *mut ffi::MDBX_commit_latency) -> MdbxResult<()> {
         // Self is dropped at end of function, so RwTxPtr::drop will be within
@@ -293,7 +310,7 @@ impl<K: TransactionKind> Transaction<K> {
     }
 }
 
-impl Transaction<RW> {
+impl TxUnsync<RW> {
     /// Creates a database if it doesn't exist.
     pub fn create_db(&mut self, name: Option<&str>, flags: DatabaseFlags) -> MdbxResult<Database> {
         self.open_db_with_flags(name, flags | DatabaseFlags::CREATE).map(Into::into)
@@ -391,7 +408,7 @@ impl Transaction<RW> {
     }
 }
 
-impl Transaction<RO> {
+impl TxUnsync<RO> {
     /// Closes the database handle.
     ///
     /// # Safety
@@ -407,7 +424,7 @@ impl Transaction<RO> {
     }
 }
 
-impl<K: TransactionKind> fmt::Debug for Transaction<K> {
+impl<K: TransactionKind> fmt::Debug for TxUnsync<K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Transaction").finish_non_exhaustive()
     }
@@ -424,14 +441,14 @@ mod tests {
         let env = Environment::builder().open(dir.path()).unwrap();
 
         // Write data
-        let mut txn = Transaction::<RW>::new(env.clone()).unwrap();
+        let mut txn = TxUnsync::<RW>::new(env.clone()).unwrap();
         let db = txn.create_db(None, DatabaseFlags::empty()).unwrap();
         txn.put(db.dbi(), b"key1", b"value1", WriteFlags::empty()).unwrap();
         txn.put(db.dbi(), b"key2", b"value2", WriteFlags::empty()).unwrap();
         txn.commit().unwrap();
 
         // Read data
-        let mut txn = Transaction::<RO>::new(env.clone()).unwrap();
+        let mut txn = TxUnsync::<RO>::new(env.clone()).unwrap();
 
         let db = txn.open_db(None).unwrap();
         let value: Option<Vec<u8>> = txn.get(db.dbi(), b"key1").unwrap();
@@ -451,13 +468,13 @@ mod tests {
 
         // Create named DBs
         {
-            let mut txn = Transaction::<RW>::new(env.clone()).unwrap();
+            let mut txn = TxUnsync::<RW>::new(env.clone()).unwrap();
             txn.create_db(Some("db1"), DatabaseFlags::empty()).unwrap();
             txn.create_db(Some("db2"), DatabaseFlags::empty()).unwrap();
             txn.commit().unwrap();
         }
 
-        let mut txn = Transaction::<RO>::new(env.clone()).unwrap();
+        let mut txn = TxUnsync::<RO>::new(env.clone()).unwrap();
 
         let db1_a = txn.open_db(Some("db1")).unwrap();
         let db1_b = txn.open_db(Some("db1")).unwrap();
@@ -473,7 +490,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
 
-        let mut txn = Transaction::<RO>::new_no_timeout(env).unwrap();
+        let mut txn = TxUnsync::<RO>::new_no_timeout(env).unwrap();
         let db = txn.open_db(None).unwrap();
         let value: Option<Vec<u8>> = txn.get(db.dbi(), b"missing").unwrap();
         assert!(value.is_none());

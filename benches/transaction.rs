@@ -115,10 +115,10 @@ fn bench_put_rand_raw(c: &mut Criterion) {
     });
 }
 
-fn bench_get_rand_single_thread(c: &mut Criterion) {
+fn bench_get_rand_unsync(c: &mut Criterion) {
     let n = 100u32;
     let (_dir, env) = setup_bench_db(n);
-    let mut txn = env.begin_ro_single_thread().unwrap();
+    let mut txn = env.begin_ro_unsync().unwrap();
     let db = txn.open_db(None).unwrap();
 
     let mut keys: Vec<String> = (0..n).map(get_key).collect();
@@ -135,7 +135,7 @@ fn bench_get_rand_single_thread(c: &mut Criterion) {
     });
 }
 
-fn bench_put_rand_single_thread(c: &mut Criterion) {
+fn bench_put_rand_unsync(c: &mut Criterion) {
     let n = 100u32;
     let (_dir, env) = setup_bench_db(0);
 
@@ -148,7 +148,7 @@ fn bench_put_rand_single_thread(c: &mut Criterion) {
 
     c.bench_function("transaction::put::rand::single_thread", |b| {
         b.iter(|| {
-            let mut txn = env.begin_rw_single_thread().unwrap();
+            let mut txn = env.begin_rw_unsync().unwrap();
             for (key, data) in &items {
                 txn.put(dbi, key, data, WriteFlags::empty()).unwrap();
             }
@@ -160,6 +160,6 @@ criterion_group! {
     name = benches;
     config = Criterion::default();
     targets = bench_get_rand, bench_get_rand_raw, bench_put_rand, bench_put_rand_raw,
-              bench_get_rand_single_thread, bench_put_rand_single_thread
+              bench_get_rand_unsync, bench_put_rand_unsync
 }
 criterion_main!(benches);

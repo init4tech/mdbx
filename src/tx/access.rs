@@ -37,6 +37,21 @@ pub trait TxPtrAccess: fmt::Debug + sealed::Sealed {
     where
         F: FnOnce(*mut ffi::MDBX_txn) -> R;
 
+    /// Execute a closure with the transaction pointer, attempting to renew
+    /// the transaction if it has timed out.
+    ///
+    /// This is primarily used for cleanup operations (like closing cursors)
+    /// that need to succeed even after a timeout. For implementations that
+    /// don't support renewal (like `RoGuard` after the Arc is dropped), this
+    /// falls back to `with_txn_ptr`.
+    fn with_txn_ptr_for_cleanup<F, R>(&self, f: F) -> MdbxResult<R>
+    where
+        F: FnOnce(*mut ffi::MDBX_txn) -> R,
+    {
+        // Default: just use the normal path
+        self.with_txn_ptr(f)
+    }
+
     /// Mark the transaction as committed.
     fn mark_committed(&self);
 }
@@ -287,6 +302,38 @@ impl TxPtrAccess for RoGuard {
         }
     }
 
+    /// Execute a cleanup closure, even if the transaction has timed out.
+    ///
+    /// When a transaction times out, the Arc is dropped and the transaction is
+    /// aborted. However, cursors still need to be closed to free memory. This
+    /// method ensures the cleanup closure runs regardless of timeout status.
+    ///
+    /// If the transaction has timed out, a null pointer is passed since the
+    /// transaction no longer exists. Cleanup operations (like cursor close)
+    /// don't actually need the transaction pointer.
+    fn with_txn_ptr_for_cleanup<F, R>(&self, f: F) -> MdbxResult<R>
+    where
+        F: FnOnce(*mut ffi::MDBX_txn) -> R,
+    {
+        #[cfg(feature = "read-tx-timeouts")]
+        {
+            // If we can get the strong ref, use it normally.
+            if let Some(strong) = self.try_ref() {
+                return Ok(f(strong.ptr));
+            }
+            // Transaction timed out and was aborted. Still run cleanup with
+            // null pointer - cursor close doesn't need a valid txn.
+            Ok(f(std::ptr::null_mut()))
+        }
+
+        #[cfg(not(feature = "read-tx-timeouts"))]
+        {
+            // Without timeouts, we always have the Arc.
+            let Some(arc) = self.try_ref() else { unreachable!() };
+            Ok(f(arc.ptr))
+        }
+    }
+
     fn mark_committed(&self) {
         // SAFETY:
         // Type is not Sync. So no concurrent access is possible.
@@ -330,8 +377,13 @@ impl<K: TransactionKind> PtrSync<K> {
 }
 
 /// A shareable pointer to an MDBX transaction.
+///
+/// This type is used internally to manage transaction access in the [`TxSync`]
+/// transaction API. Users typically don't interact with this type directly.
+///
+/// [`TxSync`]: crate::tx::TxSync
 #[derive(Debug)]
-pub(crate) struct PtrSyncInner<K: TransactionKind> {
+pub struct PtrSyncInner<K: TransactionKind> {
     /// Raw pointer to the MDBX transaction.
     txn: *mut ffi::MDBX_txn,
 
@@ -459,6 +511,13 @@ impl<K: TransactionKind> TxPtrAccess for PtrSyncInner<K> {
         }
         let result = f(self.txn);
         Ok(result)
+    }
+
+    fn with_txn_ptr_for_cleanup<F, R>(&self, f: F) -> MdbxResult<R>
+    where
+        F: FnOnce(*mut ffi::MDBX_txn) -> R,
+    {
+        self.txn_execute_renew_on_timeout(f)
     }
 
     fn mark_committed(&self) {

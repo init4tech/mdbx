@@ -4,7 +4,7 @@ use crate::{
     error::{MdbxResult, mdbx_result},
     flags::{DatabaseFlags, WriteFlags},
     sys::txn_manager::{RawTxPtr, TxnManagerMessage},
-    tx::{CachedDb, PtrSync, SharedCache, TxPtrAccess, ops},
+    tx::{CachedDb, PtrSync, PtrSyncInner, SharedCache, TxPtrAccess, ops},
 };
 use smallvec::SmallVec;
 use std::{
@@ -17,21 +17,21 @@ use std::{
 /// An MDBX transaction.
 ///
 /// All database operations require a transaction.
-pub struct Transaction<K>
+pub struct TxSync<K>
 where
     K: TransactionKind,
 {
-    inner: Arc<TransactionInner<K>>,
+    inner: Arc<SyncInner<K>>,
 }
 
-impl<K> Transaction<K>
+impl<K> TxSync<K>
 where
     K: TransactionKind,
 {
     pub(crate) fn new_from_ptr(env: Environment, txn_ptr: *mut ffi::MDBX_txn) -> Self {
         let txn = PtrSync::<K>::new(env, txn_ptr);
 
-        let inner = TransactionInner { ptr: txn, db_cache: SharedCache::default() };
+        let inner = SyncInner { ptr: txn, db_cache: SharedCache::default() };
 
         Self { inner: Arc::new(inner) }
     }
@@ -46,18 +46,6 @@ where
         F: FnOnce(*mut ffi::MDBX_txn) -> T,
     {
         self.inner.txn_execute(f)
-    }
-
-    /// Executes the given closure once the lock on the transaction is acquired. If the transaction
-    /// is timed out, it will be renewed first.
-    ///
-    /// Returns the result of the closure or an error if the transaction renewal fails.
-    #[inline]
-    pub(crate) fn txn_execute_renew_on_timeout<F, T>(&self, f: F) -> MdbxResult<T>
-    where
-        F: FnOnce(*mut ffi::MDBX_txn) -> T,
-    {
-        self.inner.txn_execute_renew_on_timeout(f)
     }
 
     /// Returns a raw pointer to the MDBX environment.
@@ -237,14 +225,14 @@ where
     }
 
     /// Open a new cursor on the given database.
-    pub fn cursor(&self, db: Database) -> MdbxResult<Cursor<'_, K>> {
-        Cursor::new(self, db)
+    pub fn cursor(&self, db: Database) -> MdbxResult<Cursor<'_, K, PtrSyncInner<K>>> {
+        Cursor::new(&self.inner.ptr, db)
     }
 
     /// Open a new cursor on the given dbi.
     #[deprecated(since = "0.2.0", note = "use `cursor(&Database)` instead")]
-    pub fn cursor_with_dbi(&self, db: Database) -> MdbxResult<Cursor<'_, K>> {
-        Cursor::new(self, db)
+    pub fn cursor_with_dbi(&self, db: Database) -> MdbxResult<Cursor<'_, K, PtrSyncInner<K>>> {
+        Cursor::new(&self.inner.ptr, db)
     }
 
     /// Disables a timeout for this read transaction.
@@ -260,7 +248,7 @@ where
     }
 }
 
-impl<K> Clone for Transaction<K>
+impl<K> Clone for TxSync<K>
 where
     K: TransactionKind,
 {
@@ -269,7 +257,7 @@ where
     }
 }
 
-impl<K> fmt::Debug for Transaction<K>
+impl<K> fmt::Debug for TxSync<K>
 where
     K: TransactionKind,
 {
@@ -279,7 +267,7 @@ where
 }
 
 /// Internals of a transaction.
-struct TransactionInner<K>
+struct SyncInner<K>
 where
     K: TransactionKind,
 {
@@ -290,7 +278,7 @@ where
     db_cache: SharedCache,
 }
 
-impl<K> TransactionInner<K>
+impl<K> SyncInner<K>
 where
     K: TransactionKind,
 {
@@ -309,17 +297,9 @@ where
     {
         self.ptr.txn_execute_fail_on_timeout(f)
     }
-
-    #[inline]
-    fn txn_execute_renew_on_timeout<F, T>(&self, f: F) -> MdbxResult<T>
-    where
-        F: FnOnce(*mut ffi::MDBX_txn) -> T,
-    {
-        self.ptr.txn_execute_renew_on_timeout(f)
-    }
 }
 
-impl Transaction<RW> {
+impl TxSync<RW> {
     /// Opens a handle to an MDBX database, creating the database if necessary.
     ///
     /// If the database is already created, the given option flags will be
@@ -393,7 +373,7 @@ impl Transaction<RW> {
     /// Reserves space for a value of the given length at the given key, and
     /// calls the given closure with a mutable slice to write into.
     ///
-    /// This is a safe wrapper around [`Transaction::reserve`].
+    /// This is a safe wrapper around [`TxSync::reserve`].
     pub fn with_reservation(
         &self,
         dbi: ffi::MDBX_dbi,
@@ -456,7 +436,7 @@ impl Transaction<RW> {
     }
 }
 
-impl Transaction<RO> {
+impl TxSync<RO> {
     pub(crate) fn new(env: Environment) -> MdbxResult<Self> {
         let mut txn: *mut ffi::MDBX_txn = ptr::null_mut();
         unsafe {
@@ -493,7 +473,7 @@ impl Transaction<RO> {
     }
 }
 
-impl Transaction<RW> {
+impl TxSync<RW> {
     /// Begins a new nested transaction inside of this transaction.
     pub fn begin_nested_txn(&mut self) -> MdbxResult<Self> {
         if self.inner.ptr.env().is_write_map() {
@@ -605,8 +585,8 @@ mod tests {
 
     #[expect(dead_code)]
     const fn test_txn_send_sync() {
-        assert_send_sync::<Transaction<RO>>();
-        assert_send_sync::<Transaction<RW>>();
+        assert_send_sync::<TxSync<RO>>();
+        assert_send_sync::<TxSync<RW>>();
     }
 
     #[test]

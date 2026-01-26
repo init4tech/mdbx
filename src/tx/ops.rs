@@ -4,6 +4,19 @@
 //! calls. These functions take raw `*mut ffi::MDBX_txn` pointers and are
 //! designed to be called from [`TxAccess::with_txn_ptr`].
 //!
+//! # Safety
+//!
+//!  - All functions require the caller to ensure the provided transaction
+//!    pointer is BOTH **Valid** and **Exclusive**.
+//!
+//! MDBX's transaction model requires that a transaction pointer is only used
+//! by a single thread at a time. Therefore, callers must ensure that no
+//! other code is concurrently accessing the same transaction pointer while
+//! these functions are being called.
+//!
+//! Failure to uphold these safety guarantees may lead to undefined behavior,
+//! data corruption, crashes, or other serious issues.
+//!
 //! [`TxAccess::with_txn_ptr`]: crate::tx::access::TxPtrAccess::with_txn_ptr
 
 use crate::{
@@ -266,6 +279,7 @@ pub(crate) unsafe fn close_db_raw(env: *mut ffi::MDBX_env, dbi: ffi::MDBX_dbi) -
 ///
 /// - `txn` must be a valid, non-null transaction pointer.
 /// - `ptr` must be a pointer to data within the transaction's database pages.
+/// - Access MUST be serialized. Concurrent access is NOT ALLOWED.
 #[inline(always)]
 pub(crate) unsafe fn is_dirty_raw(
     txn: *const ffi::MDBX_txn,

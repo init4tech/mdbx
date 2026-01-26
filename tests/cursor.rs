@@ -1,17 +1,31 @@
 #![allow(missing_docs)]
-use signet_libmdbx::*;
+mod common;
+use common::{TestRoTxn, TestRwTxn, V1Factory, V2Factory};
+use signet_libmdbx::{
+    DatabaseFlags, Environment, MdbxError, MdbxResult, ObjectLength, ReadError, ReadResult,
+    WriteFlags, tx::TxPtrAccess,
+};
 use std::{borrow::Cow, hint::black_box};
 use tempfile::tempdir;
 
 /// Convenience
 type Result<T> = ReadResult<T>;
 
-#[test]
-fn test_get() {
+// =============================================================================
+// Dual-variant tests (run for both V1 and V2)
+// =============================================================================
+
+fn test_get_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    _begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
 
-    let txn = env.begin_rw_txn().unwrap();
+    let mut txn = begin_rw(&env).unwrap();
     let db = txn.open_db(None).unwrap();
 
     assert_eq!(None, txn.cursor(db).unwrap().first::<(), ()>().unwrap());
@@ -32,11 +46,26 @@ fn test_get() {
 }
 
 #[test]
-fn test_get_dup() {
+fn test_get_v1() {
+    test_get_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_get_v2() {
+    test_get_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+fn test_get_dup_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    _begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
 
-    let txn = env.begin_rw_txn().unwrap();
+    let mut txn = begin_rw(&env).unwrap();
     let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
     txn.put(db.dbi(), b"key1", b"val1", WriteFlags::empty()).unwrap();
     txn.put(db.dbi(), b"key1", b"val2", WriteFlags::empty()).unwrap();
@@ -76,11 +105,26 @@ fn test_get_dup() {
 }
 
 #[test]
-fn test_get_dupfixed() {
+fn test_get_dup_v1() {
+    test_get_dup_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_get_dup_v2() {
+    test_get_dup_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+fn test_get_dupfixed_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    _begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
 
-    let txn = env.begin_rw_txn().unwrap();
+    let mut txn = begin_rw(&env).unwrap();
     let db = txn.create_db(None, DatabaseFlags::DUP_SORT | DatabaseFlags::DUP_FIXED).unwrap();
     txn.put(db.dbi(), b"key1", b"val1", WriteFlags::empty()).unwrap();
     txn.put(db.dbi(), b"key1", b"val2", WriteFlags::empty()).unwrap();
@@ -96,7 +140,22 @@ fn test_get_dupfixed() {
 }
 
 #[test]
-fn test_iter() {
+fn test_get_dupfixed_v1() {
+    test_get_dupfixed_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_get_dupfixed_v2() {
+    test_get_dupfixed_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+fn test_iter_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
 
@@ -108,7 +167,7 @@ fn test_iter() {
     ];
 
     {
-        let txn = env.begin_rw_txn().unwrap();
+        let mut txn = begin_rw(&env).unwrap();
         let db = txn.open_db(None).unwrap();
         for (key, data) in &items {
             txn.put(db.dbi(), key, data, WriteFlags::empty()).unwrap();
@@ -116,7 +175,7 @@ fn test_iter() {
         txn.commit().unwrap();
     }
 
-    let txn = env.begin_ro_txn().unwrap();
+    let mut txn = begin_ro(&env).unwrap();
     let db = txn.open_db(None).unwrap();
     let mut cursor = txn.cursor(db).unwrap();
 
@@ -154,10 +213,25 @@ fn test_iter() {
 }
 
 #[test]
-fn test_iter_empty_database() {
+fn test_iter_v1() {
+    test_iter_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_iter_v2() {
+    test_iter_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+fn test_iter_empty_database_impl<RwTx, RoTx>(
+    _begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
-    let txn = env.begin_ro_txn().unwrap();
+    let mut txn = begin_ro(&env).unwrap();
     let db = txn.open_db(None).unwrap();
     let mut cursor = txn.cursor(db).unwrap();
 
@@ -167,15 +241,30 @@ fn test_iter_empty_database() {
 }
 
 #[test]
-fn test_iter_empty_dup_database() {
+fn test_iter_empty_database_v1() {
+    test_iter_empty_database_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_iter_empty_database_v2() {
+    test_iter_empty_database_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+fn test_iter_empty_dup_database_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
 
-    let txn = env.begin_rw_txn().unwrap();
+    let mut txn = begin_rw(&env).unwrap();
     txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
     txn.commit().unwrap();
 
-    let txn = env.begin_ro_txn().unwrap();
+    let mut txn = begin_ro(&env).unwrap();
     let db = txn.open_db(None).unwrap();
     let mut cursor = txn.cursor(db).unwrap();
 
@@ -190,11 +279,26 @@ fn test_iter_empty_dup_database() {
 }
 
 #[test]
-fn test_iter_dup() {
+fn test_iter_empty_dup_database_v1() {
+    test_iter_empty_dup_database_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_iter_empty_dup_database_v2() {
+    test_iter_empty_dup_database_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+fn test_iter_dup_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
 
-    let txn = env.begin_rw_txn().unwrap();
+    let mut txn = begin_rw(&env).unwrap();
     txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
     txn.commit().unwrap();
 
@@ -217,15 +321,15 @@ fn test_iter_dup() {
     .collect();
 
     {
-        let txn = env.begin_rw_txn().unwrap();
+        let mut txn = begin_rw(&env).unwrap();
         for (key, data) in items.clone() {
             let db = txn.open_db(None).unwrap();
-            txn.put(db.dbi(), key, data, WriteFlags::empty()).unwrap();
+            txn.put(db.dbi(), &key, &data, WriteFlags::empty()).unwrap();
         }
         txn.commit().unwrap();
     }
 
-    let txn = env.begin_ro_txn().unwrap();
+    let mut txn = begin_ro(&env).unwrap();
     let db = txn.open_db(None).unwrap();
     let mut cursor = txn.cursor(db).unwrap();
     assert_eq!(items, cursor.iter_dup().flatten().flatten().collect::<Result<Vec<_>>>().unwrap());
@@ -294,13 +398,28 @@ fn test_iter_dup() {
 }
 
 #[test]
-fn test_iter_del_get() {
+fn test_iter_dup_v1() {
+    test_iter_dup_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_iter_dup_v2() {
+    test_iter_dup_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+fn test_iter_del_get_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    _begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
 
     let items = vec![(*b"a", *b"1"), (*b"b", *b"2")];
     {
-        let txn = env.begin_rw_txn().unwrap();
+        let mut txn = begin_rw(&env).unwrap();
         let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
         assert_eq!(
             txn.cursor(db)
@@ -316,7 +435,7 @@ fn test_iter_del_get() {
     }
 
     {
-        let txn = env.begin_rw_txn().unwrap();
+        let mut txn = begin_rw(&env).unwrap();
         let db = txn.open_db(None).unwrap();
         for (key, data) in &items {
             txn.put(db.dbi(), key, data, WriteFlags::empty()).unwrap();
@@ -324,7 +443,7 @@ fn test_iter_del_get() {
         txn.commit().unwrap();
     }
 
-    let txn = env.begin_rw_txn().unwrap();
+    let mut txn = begin_rw(&env).unwrap();
     let db = txn.open_db(None).unwrap();
     let mut cursor = txn.cursor(db).unwrap();
     assert_eq!(
@@ -353,11 +472,26 @@ fn test_iter_del_get() {
 }
 
 #[test]
-fn test_put_del() {
+fn test_iter_del_get_v1() {
+    test_iter_del_get_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_iter_del_get_v2() {
+    test_iter_del_get_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+fn test_put_del_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    _begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
 
-    let txn = env.begin_rw_txn().unwrap();
+    let mut txn = begin_rw(&env).unwrap();
     let db = txn.open_db(None).unwrap();
     let mut cursor = txn.cursor(db).unwrap();
 
@@ -386,11 +520,26 @@ fn test_put_del() {
 }
 
 #[test]
-fn test_dup_sort_validation_on_non_dupsort_db() {
+fn test_put_del_v1() {
+    test_put_del_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_put_del_v2() {
+    test_put_del_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+fn test_dup_sort_validation_on_non_dupsort_db_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    _begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
 
-    let txn = env.begin_rw_txn().unwrap();
+    let mut txn = begin_rw(&env).unwrap();
     let db = txn.open_db(None).unwrap(); // Non-DUPSORT database
     txn.put(db.dbi(), b"key1", b"val1", WriteFlags::empty()).unwrap();
 
@@ -418,11 +567,26 @@ fn test_dup_sort_validation_on_non_dupsort_db() {
 }
 
 #[test]
-fn test_dup_fixed_validation_on_non_dupfixed_db() {
+fn test_dup_sort_validation_on_non_dupsort_db_v1() {
+    test_dup_sort_validation_on_non_dupsort_db_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_dup_sort_validation_on_non_dupsort_db_v2() {
+    test_dup_sort_validation_on_non_dupsort_db_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+fn test_dup_fixed_validation_on_non_dupfixed_db_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    _begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
 
-    let txn = env.begin_rw_txn().unwrap();
+    let mut txn = begin_rw(&env).unwrap();
     // Create DUPSORT but NOT DUPFIXED database
     let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
     txn.put(db.dbi(), b"key1", b"val1", WriteFlags::empty()).unwrap();
@@ -442,11 +606,26 @@ fn test_dup_fixed_validation_on_non_dupfixed_db() {
 }
 
 #[test]
-fn test_dup_sort_methods_work_on_dupsort_db() {
+fn test_dup_fixed_validation_on_non_dupfixed_db_v1() {
+    test_dup_fixed_validation_on_non_dupfixed_db_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_dup_fixed_validation_on_non_dupfixed_db_v2() {
+    test_dup_fixed_validation_on_non_dupfixed_db_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+fn test_dup_sort_methods_work_on_dupsort_db_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    _begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
 
-    let txn = env.begin_rw_txn().unwrap();
+    let mut txn = begin_rw(&env).unwrap();
     let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
     txn.put(db.dbi(), b"key1", b"val1", WriteFlags::empty()).unwrap();
     txn.put(db.dbi(), b"key1", b"val2", WriteFlags::empty()).unwrap();
@@ -464,11 +643,26 @@ fn test_dup_sort_methods_work_on_dupsort_db() {
 }
 
 #[test]
-fn test_dup_fixed_methods_work_on_dupfixed_db() {
+fn test_dup_sort_methods_work_on_dupsort_db_v1() {
+    test_dup_sort_methods_work_on_dupsort_db_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_dup_sort_methods_work_on_dupsort_db_v2() {
+    test_dup_sort_methods_work_on_dupsort_db_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+fn test_dup_fixed_methods_work_on_dupfixed_db_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    _begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
 
-    let txn = env.begin_rw_txn().unwrap();
+    let mut txn = begin_rw(&env).unwrap();
     let db = txn.create_db(None, DatabaseFlags::DUP_SORT | DatabaseFlags::DUP_FIXED).unwrap();
     txn.put(db.dbi(), b"key1", b"val1", WriteFlags::empty()).unwrap();
     txn.put(db.dbi(), b"key1", b"val2", WriteFlags::empty()).unwrap();
@@ -484,18 +678,33 @@ fn test_dup_fixed_methods_work_on_dupfixed_db() {
 }
 
 #[test]
-fn test_iter_exhausted_cursor_repositions() {
+fn test_dup_fixed_methods_work_on_dupfixed_db_v1() {
+    test_dup_fixed_methods_work_on_dupfixed_db_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_dup_fixed_methods_work_on_dupfixed_db_v2() {
+    test_dup_fixed_methods_work_on_dupfixed_db_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+fn test_iter_exhausted_cursor_repositions_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
 
-    let txn = env.begin_rw_txn().unwrap();
+    let mut txn = begin_rw(&env).unwrap();
     let db = txn.open_db(None).unwrap();
     for i in 0u8..100 {
-        txn.put(db.dbi(), [i], [i], WriteFlags::empty()).unwrap();
+        txn.put(db.dbi(), &[i], &[i], WriteFlags::empty()).unwrap();
     }
     txn.commit().unwrap();
 
-    let txn = env.begin_ro_txn().unwrap();
+    let mut txn = begin_ro(&env).unwrap();
     let db = txn.open_db(None).unwrap();
     let mut cursor = txn.cursor(db).unwrap();
 
@@ -515,14 +724,29 @@ fn test_iter_exhausted_cursor_repositions() {
 }
 
 #[test]
-fn test_iter_benchmark_pattern() {
+fn test_iter_exhausted_cursor_repositions_v1() {
+    test_iter_exhausted_cursor_repositions_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_iter_exhausted_cursor_repositions_v2() {
+    test_iter_exhausted_cursor_repositions_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+fn test_iter_benchmark_pattern_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
     // This test mirrors the exact logic of bench_get_seq_iter
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
 
     let n = 100u32;
 
-    let txn = env.begin_rw_txn().unwrap();
+    let mut txn = begin_rw(&env).unwrap();
     let db = txn.open_db(None).unwrap();
     for i in 0..n {
         let key = format!("key{i}");
@@ -532,7 +756,7 @@ fn test_iter_benchmark_pattern() {
     txn.commit().unwrap();
 
     // Setup like benchmark: transaction and db outside the "iteration"
-    let txn = env.begin_ro_txn().unwrap();
+    let mut txn = begin_ro(&env).unwrap();
     let db = txn.open_db(None).unwrap();
 
     // Run the benchmark closure multiple times to match criterion behavior
@@ -555,7 +779,9 @@ fn test_iter_benchmark_pattern() {
         }
 
         // Loop 3: internal iterate function (doesn't affect count)
-        fn iterate(cursor: &mut Cursor<signet_libmdbx::RO>) -> ReadResult<()> {
+        fn iterate<A: TxPtrAccess>(
+            cursor: &mut signet_libmdbx::Cursor<signet_libmdbx::RO, A>,
+        ) -> ReadResult<()> {
             for result in cursor.iter::<ObjectLength, ObjectLength>() {
                 let (key_len, data_len) = result?;
                 black_box(*key_len + *data_len);
@@ -566,5 +792,199 @@ fn test_iter_benchmark_pattern() {
 
         // With the fix, both loops should iterate all items
         assert_eq!(count, n * 2);
+    }
+}
+
+#[test]
+fn test_iter_benchmark_pattern_v1() {
+    test_iter_benchmark_pattern_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_iter_benchmark_pattern_v2() {
+    test_iter_benchmark_pattern_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+// =============================================================================
+// Timeout Tests (V2 only with read-tx-timeouts feature)
+// =============================================================================
+
+#[cfg(feature = "read-tx-timeouts")]
+mod timeout_tests {
+    use signet_libmdbx::*;
+    use std::time::Duration;
+    use tempfile::tempdir;
+
+    const SHORT_TIMEOUT: Duration = Duration::from_millis(100);
+    const WAIT_FOR_TIMEOUT: Duration = Duration::from_millis(200);
+
+    /// Test that cursor operations fail after RO transaction times out.
+    #[test]
+    fn test_cursor_operations_fail_after_timeout() {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+
+        // Write some data
+        {
+            let txn = env.begin_rw_txn().unwrap();
+            let db = txn.open_db(None).unwrap();
+            txn.put(db.dbi(), b"key1", b"val1", WriteFlags::empty()).unwrap();
+            txn.put(db.dbi(), b"key2", b"val2", WriteFlags::empty()).unwrap();
+            txn.commit().unwrap();
+        }
+
+        // Create a v2 transaction with short timeout
+        let mut txn = env.begin_ro_single_thread_with_timeout(SHORT_TIMEOUT).unwrap();
+        let db = txn.open_db(None).unwrap();
+        let mut cursor = txn.cursor(db).unwrap();
+
+        // Cursor should work before timeout
+        assert_eq!(cursor.first().unwrap(), Some((*b"key1", *b"val1")));
+
+        // Wait for timeout
+        std::thread::sleep(WAIT_FOR_TIMEOUT);
+
+        // Cursor operations should now fail with ReadTransactionTimeout
+        let err = cursor.first::<(), ()>().unwrap_err();
+        assert!(
+            matches!(err, ReadError::Mdbx(MdbxError::ReadTransactionTimeout)),
+            "Expected ReadTransactionTimeout, got: {err:?}"
+        );
+    }
+
+    /// Test cursor cleanup after timeout (no memory leak).
+    #[test]
+    fn test_cursor_cleanup_after_timeout() {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+
+        // Write some data
+        {
+            let txn = env.begin_rw_txn().unwrap();
+            let db = txn.open_db(None).unwrap();
+            txn.put(db.dbi(), b"key1", b"val1", WriteFlags::empty()).unwrap();
+            txn.commit().unwrap();
+        }
+
+        // Create transaction with short timeout
+        let mut txn = env.begin_ro_single_thread_with_timeout(SHORT_TIMEOUT).unwrap();
+        let db = txn.open_db(None).unwrap();
+        let cursor = txn.cursor(db).unwrap();
+
+        // Wait for timeout
+        std::thread::sleep(WAIT_FOR_TIMEOUT);
+
+        // Dropping cursor after timeout should not panic
+        drop(cursor);
+        drop(txn);
+
+        // Environment should still be usable
+        let txn = env.begin_ro_txn().unwrap();
+        let db = txn.open_db(None).unwrap();
+        let mut cursor = txn.cursor(db).unwrap();
+        assert_eq!(cursor.first().unwrap(), Some((*b"key1", *b"val1")));
+    }
+
+    /// Test multiple cursors cleanup after timeout.
+    #[test]
+    fn test_multiple_cursors_cleanup_after_timeout() {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().set_max_dbs(10).open(dir.path()).unwrap();
+
+        // Create databases and write data
+        {
+            let txn = env.begin_rw_txn().unwrap();
+            let db1 = txn.create_db(Some("db1"), DatabaseFlags::empty()).unwrap();
+            let db2 = txn.create_db(Some("db2"), DatabaseFlags::empty()).unwrap();
+            txn.put(db1.dbi(), b"k1", b"v1", WriteFlags::empty()).unwrap();
+            txn.put(db2.dbi(), b"k2", b"v2", WriteFlags::empty()).unwrap();
+            txn.commit().unwrap();
+        }
+
+        // Create transaction with short timeout and multiple cursors
+        let mut txn = env.begin_ro_single_thread_with_timeout(SHORT_TIMEOUT).unwrap();
+        let db1 = txn.open_db(Some("db1")).unwrap();
+        let db2 = txn.open_db(Some("db2")).unwrap();
+        let cursor1 = txn.cursor(db1).unwrap();
+        let cursor2 = txn.cursor(db2).unwrap();
+
+        // Wait for timeout
+        std::thread::sleep(WAIT_FOR_TIMEOUT);
+
+        // Dropping all cursors after timeout should not panic
+        drop(cursor1);
+        drop(cursor2);
+        drop(txn);
+
+        // Verify environment is still usable
+        let txn = env.begin_ro_txn().unwrap();
+        let db = txn.open_db(Some("db1")).unwrap();
+        let mut cursor = txn.cursor(db).unwrap();
+        assert_eq!(cursor.first().unwrap(), Some((*b"k1", *b"v1")));
+    }
+
+    /// Test that transactions without timeout work correctly.
+    #[test]
+    fn test_no_timeout_transaction_works() {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+
+        // Write data
+        {
+            let txn = env.begin_rw_txn().unwrap();
+            let db = txn.open_db(None).unwrap();
+            txn.put(db.dbi(), b"key1", b"val1", WriteFlags::empty()).unwrap();
+            txn.commit().unwrap();
+        }
+
+        // Create transaction without timeout
+        let mut txn = env.begin_ro_single_thread_no_timeout().unwrap();
+        let db = txn.open_db(None).unwrap();
+        let mut cursor = txn.cursor(db).unwrap();
+
+        // Cursor should work before the "normal" timeout period
+        assert_eq!(cursor.first().unwrap(), Some((*b"key1", *b"val1")));
+
+        // Wait longer than the short timeout (but not forever)
+        std::thread::sleep(WAIT_FOR_TIMEOUT);
+
+        // Cursor should still work since there's no timeout
+        assert_eq!(cursor.first().unwrap(), Some((*b"key1", *b"val1")));
+    }
+
+    /// Test iterator behavior after timeout.
+    #[test]
+    fn test_iter_fails_after_timeout() {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+
+        // Write data
+        {
+            let txn = env.begin_rw_txn().unwrap();
+            let db = txn.open_db(None).unwrap();
+            for i in 0u8..10 {
+                txn.put(db.dbi(), [i], [i], WriteFlags::empty()).unwrap();
+            }
+            txn.commit().unwrap();
+        }
+
+        // Create transaction with short timeout
+        let mut txn = env.begin_ro_single_thread_with_timeout(SHORT_TIMEOUT).unwrap();
+        let db = txn.open_db(None).unwrap();
+        let mut cursor = txn.cursor(db).unwrap();
+
+        // Start iterating before timeout
+        let mut iter = cursor.iter::<[u8; 1], [u8; 1]>();
+        assert!(iter.next().unwrap().is_ok());
+
+        // Wait for timeout
+        std::thread::sleep(WAIT_FOR_TIMEOUT);
+
+        // Iterator should return timeout error
+        let err = iter.next().unwrap().unwrap_err();
+        assert!(
+            matches!(err, ReadError::Mdbx(MdbxError::ReadTransactionTimeout)),
+            "Expected ReadTransactionTimeout, got: {err:?}"
+        );
     }
 }

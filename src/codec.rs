@@ -1,3 +1,5 @@
+//! Codec for deserializing database values into Rust types.
+
 use crate::{MdbxError, TransactionKind, error::ReadResult, tx::ops};
 use ffi::MDBX_txn;
 use std::{borrow::Cow, slice};
@@ -15,6 +17,7 @@ use std::{borrow::Cow, slice};
 /// - `[u8; N]` - Copies into fixed-size array - may pan
 /// - `()` - Ignores data entirely
 /// - [`ObjectLength`] - Returns only the length
+///
 pub trait TableObjectOwned: for<'de> TableObject<'de> {
     /// Decodes the object from the given bytes, without borrowing them.
     ///
@@ -118,7 +121,8 @@ pub trait TableObject<'a>: Sized {
 
     /// Decodes the value directly from the given MDBX_val pointer.
     ///
-    /// **Do not implement this unless you need zero-copy borrowing.**
+    /// **Do not implement this unless you need zero-copy borrowing and cannot
+    /// handle the [`Cow`] overhead**.
     ///
     /// This method is used internally to optimize deserialization for types
     /// that borrow data directly from the database (like `Cow<'a, [u8]>`).
@@ -154,7 +158,8 @@ impl<'a> TableObject<'a> for Cow<'a, [u8]> {
         txn: *const MDBX_txn,
         data_val: ffi::MDBX_val,
     ) -> ReadResult<Self> {
-        // SAFETY: data_val is valid from caller, slice is valid for lifetime 'a.
+        // SAFETY: Caller ensures the tx is active, slice is valid for lifetime
+        // 'a.
         let s = unsafe { slice::from_raw_parts(data_val.iov_base as *const u8, data_val.iov_len) };
 
         // SAFETY: txn is valid from caller, data_val.iov_base points to db pages.
@@ -167,6 +172,16 @@ impl<'a> TableObject<'a> for Cow<'a, [u8]> {
 impl TableObject<'_> for Vec<u8> {
     fn decode_borrow(data: Cow<'_, [u8]>) -> ReadResult<Self> {
         Ok(data.into_owned())
+    }
+
+    unsafe fn decode_val<K: TransactionKind>(
+        _tx: *const MDBX_txn,
+        data_val: ffi::MDBX_val,
+    ) -> ReadResult<Self> {
+        // SAFETY: Caller ensures the tx is active, slice is valid for lifetime.
+        // We always copy for Vec<u8> since we need to own the data.
+        let s = unsafe { slice::from_raw_parts(data_val.iov_base as *const u8, data_val.iov_len) };
+        Ok(s.to_vec())
     }
 }
 
@@ -185,11 +200,27 @@ impl<'a> TableObject<'a> for () {
 
 /// If you don't need the data itself, just its length.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[repr(transparent)]
 pub struct ObjectLength(pub usize);
 
 impl TableObject<'_> for ObjectLength {
     fn decode_borrow(data: Cow<'_, [u8]>) -> ReadResult<Self> {
         Ok(Self(data.len()))
+    }
+
+    unsafe fn decode_val<K: TransactionKind>(
+        _tx: *const MDBX_txn,
+        data_val: ffi::MDBX_val,
+    ) -> ReadResult<Self> {
+        Ok(Self(data_val.iov_len))
+    }
+}
+
+impl core::ops::Deref for ObjectLength {
+    type Target = usize;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
@@ -202,12 +233,18 @@ impl<'a, const LEN: usize> TableObject<'a> for [u8; LEN] {
         a[..].copy_from_slice(&data);
         Ok(a)
     }
-}
 
-impl core::ops::Deref for ObjectLength {
-    type Target = usize;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
+    unsafe fn decode_val<K: TransactionKind>(
+        _tx: *const MDBX_txn,
+        data_val: ffi::MDBX_val,
+    ) -> ReadResult<Self> {
+        // SAFETY: Caller ensures the tx is active, slice is valid.
+        if data_val.iov_len != LEN {
+            return Err(MdbxError::DecodeErrorLenDiff.into());
+        }
+        let s = unsafe { slice::from_raw_parts(data_val.iov_base as *const u8, data_val.iov_len) };
+        let mut a = [0; LEN];
+        a[..].copy_from_slice(s);
+        Ok(a)
     }
 }

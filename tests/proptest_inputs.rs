@@ -39,7 +39,7 @@ proptest! {
         let db = txn.open_db(None).unwrap();
 
         // Should not panic - may return error for invalid sizes
-        let put_result = txn.put(db.dbi(), &key, &value, WriteFlags::empty());
+        let put_result = txn.put(db, &key, &value, WriteFlags::empty());
 
         // If put succeeded, get should not panic
         if put_result.is_ok() {
@@ -56,7 +56,7 @@ proptest! {
         let db = txn.open_db(None).unwrap();
 
         // Delete on nonexistent key should return Ok(false), not panic
-        let result = txn.del(db.dbi(), &key, None);
+        let result = txn.del(db, &key, None);
         prop_assert!(result.is_ok());
         prop_assert!(!result.unwrap());
     }
@@ -92,7 +92,7 @@ proptest! {
         let db = txn.open_db(None).unwrap();
 
         // Should not panic - may return error for invalid sizes
-        let put_result = txn.put(db.dbi(), &key, &value, WriteFlags::empty());
+        let put_result = txn.put(db, &key, &value, WriteFlags::empty());
 
         // If put succeeded, get should not panic
         if put_result.is_ok() {
@@ -109,7 +109,7 @@ proptest! {
         let db = txn.open_db(None).unwrap();
 
         // Delete on nonexistent key should return Ok(false), not panic
-        let result = txn.del(db.dbi(), &key, None);
+        let result = txn.del(db, &key, None);
         prop_assert!(result.is_ok());
         prop_assert!(!result.unwrap());
     }
@@ -145,7 +145,7 @@ proptest! {
         let db = txn.open_db(None).unwrap();
 
         // Add some data so cursor is positioned
-        txn.put(db.dbi(), b"test_key", b"test_val", WriteFlags::empty()).unwrap();
+        txn.put(db, b"test_key", b"test_val", WriteFlags::empty()).unwrap();
 
         let mut cursor = txn.cursor(db).unwrap();
 
@@ -163,8 +163,8 @@ proptest! {
         let db = txn.open_db(None).unwrap();
 
         // Add some data
-        txn.put(db.dbi(), b"aaa", b"val_a", WriteFlags::empty()).unwrap();
-        txn.put(db.dbi(), b"zzz", b"val_z", WriteFlags::empty()).unwrap();
+        txn.put(db, b"aaa", b"val_a", WriteFlags::empty()).unwrap();
+        txn.put(db, b"zzz", b"val_z", WriteFlags::empty()).unwrap();
 
         let mut cursor = txn.cursor(db).unwrap();
 
@@ -182,7 +182,7 @@ proptest! {
         let txn = env.begin_rw_txn().unwrap();
         let db = txn.open_db(None).unwrap();
 
-        txn.put(db.dbi(), b"test", b"value", WriteFlags::empty()).unwrap();
+        txn.put(db, b"test", b"value", WriteFlags::empty()).unwrap();
 
         let mut cursor = txn.cursor(db).unwrap();
 
@@ -200,7 +200,7 @@ proptest! {
         let mut txn = env.begin_rw_unsync().unwrap();
         let db = txn.open_db(None).unwrap();
 
-        txn.put(db.dbi(), b"test_key", b"test_val", WriteFlags::empty()).unwrap();
+        txn.put(db, b"test_key", b"test_val", WriteFlags::empty()).unwrap();
 
         let mut cursor = txn.cursor(db).unwrap();
 
@@ -216,8 +216,8 @@ proptest! {
         let mut txn = env.begin_rw_unsync().unwrap();
         let db = txn.open_db(None).unwrap();
 
-        txn.put(db.dbi(), b"aaa", b"val_a", WriteFlags::empty()).unwrap();
-        txn.put(db.dbi(), b"zzz", b"val_z", WriteFlags::empty()).unwrap();
+        txn.put(db, b"aaa", b"val_a", WriteFlags::empty()).unwrap();
+        txn.put(db, b"zzz", b"val_z", WriteFlags::empty()).unwrap();
 
         let mut cursor = txn.cursor(db).unwrap();
 
@@ -234,7 +234,7 @@ proptest! {
         let mut txn = env.begin_rw_unsync().unwrap();
         let db = txn.open_db(None).unwrap();
 
-        txn.put(db.dbi(), b"test", b"value", WriteFlags::empty()).unwrap();
+        txn.put(db, b"test", b"value", WriteFlags::empty()).unwrap();
 
         let mut cursor = txn.cursor(db).unwrap();
 
@@ -302,7 +302,7 @@ proptest! {
 
         for value in &values {
             // Should not panic
-            let result = txn.put(db.dbi(), &key, value, WriteFlags::empty());
+            let result = txn.put(db, &key, value, WriteFlags::empty());
             // Errors are acceptable, panics are not
             let _ = result;
         }
@@ -320,7 +320,7 @@ proptest! {
         let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
 
         for value in &values {
-            let result = txn.put(db.dbi(), &key, value, WriteFlags::empty());
+            let result = txn.put(db, &key, value, WriteFlags::empty());
             let _ = result;
         }
     }
@@ -337,8 +337,8 @@ proptest! {
         let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
 
         // Add some data
-        txn.put(db.dbi(), b"key1", b"val1", WriteFlags::empty()).unwrap();
-        txn.put(db.dbi(), b"key1", b"val2", WriteFlags::empty()).unwrap();
+        txn.put(db, b"key1", b"val1", WriteFlags::empty()).unwrap();
+        txn.put(db, b"key1", b"val2", WriteFlags::empty()).unwrap();
 
         let mut cursor = txn.cursor(db).unwrap();
 
@@ -359,8 +359,8 @@ proptest! {
         let txn = env.begin_rw_txn().unwrap();
         let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
 
-        txn.put(db.dbi(), b"key1", b"val1", WriteFlags::empty()).unwrap();
-        txn.put(db.dbi(), b"key1", b"val2", WriteFlags::empty()).unwrap();
+        txn.put(db, b"key1", b"val1", WriteFlags::empty()).unwrap();
+        txn.put(db, b"key1", b"val2", WriteFlags::empty()).unwrap();
 
         let mut cursor = txn.cursor(db).unwrap();
 
@@ -381,8 +381,8 @@ proptest! {
         let mut txn = env.begin_rw_unsync().unwrap();
         let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
 
-        txn.put(db.dbi(), b"key1", b"val1", WriteFlags::empty()).unwrap();
-        txn.put(db.dbi(), b"key1", b"val2", WriteFlags::empty()).unwrap();
+        txn.put(db, b"key1", b"val1", WriteFlags::empty()).unwrap();
+        txn.put(db, b"key1", b"val2", WriteFlags::empty()).unwrap();
 
         let mut cursor = txn.cursor(db).unwrap();
 
@@ -402,8 +402,8 @@ proptest! {
         let mut txn = env.begin_rw_unsync().unwrap();
         let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
 
-        txn.put(db.dbi(), b"key1", b"val1", WriteFlags::empty()).unwrap();
-        txn.put(db.dbi(), b"key1", b"val2", WriteFlags::empty()).unwrap();
+        txn.put(db, b"key1", b"val1", WriteFlags::empty()).unwrap();
+        txn.put(db, b"key1", b"val2", WriteFlags::empty()).unwrap();
 
         let mut cursor = txn.cursor(db).unwrap();
 
@@ -430,7 +430,7 @@ proptest! {
 
         // Add some data
         for i in 0u8..10 {
-            txn.put(db.dbi(), [i], [i], WriteFlags::empty()).unwrap();
+            txn.put(db, [i], [i], WriteFlags::empty()).unwrap();
         }
 
         let mut cursor = txn.cursor(db).unwrap();
@@ -453,7 +453,7 @@ proptest! {
         let db = txn.open_db(None).unwrap();
 
         for i in 0u8..10 {
-            txn.put(db.dbi(), [i], [i], WriteFlags::empty()).unwrap();
+            txn.put(db, [i], [i], WriteFlags::empty()).unwrap();
         }
 
         let mut cursor = txn.cursor(db).unwrap();
@@ -475,7 +475,7 @@ proptest! {
 
         // Add some dup data
         for i in 0u8..5 {
-            txn.put(db.dbi(), b"known_key", [i], WriteFlags::empty()).unwrap();
+            txn.put(db, b"known_key", [i], WriteFlags::empty()).unwrap();
         }
 
         let mut cursor = txn.cursor(db).unwrap();
@@ -497,8 +497,8 @@ proptest! {
         let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
 
         for i in 0u8..5 {
-            txn.put(db.dbi(), b"key_a", [i], WriteFlags::empty()).unwrap();
-            txn.put(db.dbi(), b"key_z", [i], WriteFlags::empty()).unwrap();
+            txn.put(db, b"key_a", [i], WriteFlags::empty()).unwrap();
+            txn.put(db, b"key_z", [i], WriteFlags::empty()).unwrap();
         }
 
         let mut cursor = txn.cursor(db).unwrap();
@@ -522,7 +522,7 @@ proptest! {
         let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
 
         for i in 0u8..5 {
-            txn.put(db.dbi(), b"known_key", [i], WriteFlags::empty()).unwrap();
+            txn.put(db, b"known_key", [i], WriteFlags::empty()).unwrap();
         }
 
         let mut cursor = txn.cursor(db).unwrap();
@@ -542,8 +542,8 @@ proptest! {
         let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
 
         for i in 0u8..5 {
-            txn.put(db.dbi(), b"key_a", [i], WriteFlags::empty()).unwrap();
-            txn.put(db.dbi(), b"key_z", [i], WriteFlags::empty()).unwrap();
+            txn.put(db, b"key_a", [i], WriteFlags::empty()).unwrap();
+            txn.put(db, b"key_z", [i], WriteFlags::empty()).unwrap();
         }
 
         let mut cursor = txn.cursor(db).unwrap();
@@ -620,14 +620,14 @@ proptest! {
         let db = txn.open_db(None).unwrap();
 
         // Empty key should be valid
-        let put_result = txn.put(db.dbi(), b"", &value, WriteFlags::empty());
+        let put_result = txn.put(db, b"", &value, WriteFlags::empty());
         prop_assert!(put_result.is_ok());
 
         let get_result: signet_libmdbx::ReadResult<Option<Vec<u8>>> =
             txn.get(db.dbi(), b"");
         prop_assert!(get_result.is_ok());
 
-        let del_result = txn.del(db.dbi(), b"", None);
+        let del_result = txn.del(db, b"", None);
         prop_assert!(del_result.is_ok());
     }
 
@@ -643,7 +643,7 @@ proptest! {
         let db = txn.open_db(None).unwrap();
 
         // Empty value should be valid
-        let put_result = txn.put(db.dbi(), &key, b"", WriteFlags::empty());
+        let put_result = txn.put(db, &key, b"", WriteFlags::empty());
         prop_assert!(put_result.is_ok());
 
         let get_result: signet_libmdbx::ReadResult<Option<Vec<u8>>> =
@@ -660,14 +660,14 @@ proptest! {
         let mut txn = env.begin_rw_unsync().unwrap();
         let db = txn.open_db(None).unwrap();
 
-        let put_result = txn.put(db.dbi(), b"", &value, WriteFlags::empty());
+        let put_result = txn.put(db, b"", &value, WriteFlags::empty());
         prop_assert!(put_result.is_ok());
 
         let get_result: signet_libmdbx::ReadResult<Option<Vec<u8>>> =
             txn.get(db.dbi(), b"");
         prop_assert!(get_result.is_ok());
 
-        let del_result = txn.del(db.dbi(), b"", None);
+        let del_result = txn.del(db, b"", None);
         prop_assert!(del_result.is_ok());
     }
 
@@ -681,7 +681,7 @@ proptest! {
         let mut txn = env.begin_rw_unsync().unwrap();
         let db = txn.open_db(None).unwrap();
 
-        let put_result = txn.put(db.dbi(), &key, b"", WriteFlags::empty());
+        let put_result = txn.put(db, &key, b"", WriteFlags::empty());
         prop_assert!(put_result.is_ok());
 
         let get_result: signet_libmdbx::ReadResult<Option<Vec<u8>>> =
@@ -709,7 +709,7 @@ proptest! {
         let db = txn.open_db(None).unwrap();
 
         // Large key should not panic - may succeed or return error
-        let _ = txn.put(db.dbi(), &large_key, &value, WriteFlags::empty());
+        let _ = txn.put(db, &large_key, &value, WriteFlags::empty());
     }
 
     /// Test that very large keys via txn.put() do not panic (V2).
@@ -722,7 +722,7 @@ proptest! {
         let mut txn = env.begin_rw_unsync().unwrap();
         let db = txn.open_db(None).unwrap();
 
-        let _ = txn.put(db.dbi(), &large_key, &value, WriteFlags::empty());
+        let _ = txn.put(db, &large_key, &value, WriteFlags::empty());
     }
 }
 
@@ -741,7 +741,7 @@ proptest! {
         let txn = env.begin_rw_txn().unwrap();
         let db = txn.open_db(None).unwrap();
 
-        let put_result = txn.put(db.dbi(), &key, &value, WriteFlags::empty());
+        let put_result = txn.put(db, &key, &value, WriteFlags::empty());
         if put_result.is_ok() {
             let retrieved: Option<Vec<u8>> = txn.get(db.dbi(), &key).unwrap();
             prop_assert_eq!(retrieved, Some(value));
@@ -764,7 +764,7 @@ proptest! {
         let mut txn = env.begin_rw_unsync().unwrap();
         let db = txn.open_db(None).unwrap();
 
-        let put_result = txn.put(db.dbi(), &key, &value, WriteFlags::empty());
+        let put_result = txn.put(db, &key, &value, WriteFlags::empty());
         if put_result.is_ok() {
             let retrieved: Option<Vec<u8>> = txn.get(db.dbi(), &key).unwrap();
             prop_assert_eq!(retrieved, Some(value));
@@ -791,8 +791,8 @@ proptest! {
         let txn = env.begin_rw_txn().unwrap();
         let db = txn.open_db(None).unwrap();
 
-        let put1 = txn.put(db.dbi(), &key, &value1, WriteFlags::empty());
-        let put2 = txn.put(db.dbi(), &key, &value2, WriteFlags::empty());
+        let put1 = txn.put(db, &key, &value1, WriteFlags::empty());
+        let put2 = txn.put(db, &key, &value2, WriteFlags::empty());
 
         if put1.is_ok() && put2.is_ok() {
             let retrieved: Option<Vec<u8>> = txn.get(db.dbi(), &key).unwrap();
@@ -820,8 +820,8 @@ proptest! {
         let mut txn = env.begin_rw_unsync().unwrap();
         let db = txn.open_db(None).unwrap();
 
-        let put1 = txn.put(db.dbi(), &key, &value1, WriteFlags::empty());
-        let put2 = txn.put(db.dbi(), &key, &value2, WriteFlags::empty());
+        let put1 = txn.put(db, &key, &value1, WriteFlags::empty());
+        let put2 = txn.put(db, &key, &value2, WriteFlags::empty());
 
         if put1.is_ok() && put2.is_ok() {
             let retrieved: Option<Vec<u8>> = txn.get(db.dbi(), &key).unwrap();
@@ -845,9 +845,9 @@ proptest! {
         let txn = env.begin_rw_txn().unwrap();
         let db = txn.open_db(None).unwrap();
 
-        let put_result = txn.put(db.dbi(), &key, &value, WriteFlags::empty());
+        let put_result = txn.put(db, &key, &value, WriteFlags::empty());
         if put_result.is_ok() {
-            let deleted = txn.del(db.dbi(), &key, None).unwrap();
+            let deleted = txn.del(db, &key, None).unwrap();
             prop_assert!(deleted);
 
             let retrieved: Option<Vec<u8>> = txn.get(db.dbi(), &key).unwrap();
@@ -871,9 +871,9 @@ proptest! {
         let mut txn = env.begin_rw_unsync().unwrap();
         let db = txn.open_db(None).unwrap();
 
-        let put_result = txn.put(db.dbi(), &key, &value, WriteFlags::empty());
+        let put_result = txn.put(db, &key, &value, WriteFlags::empty());
         if put_result.is_ok() {
-            let deleted = txn.del(db.dbi(), &key, None).unwrap();
+            let deleted = txn.del(db, &key, None).unwrap();
             prop_assert!(deleted);
 
             let retrieved: Option<Vec<u8>> = txn.get(db.dbi(), &key).unwrap();
@@ -903,7 +903,7 @@ proptest! {
         // Insert all values
         let mut inserted: Vec<Vec<u8>> = Vec::new();
         for value in &values {
-            if txn.put(db.dbi(), &key, value, WriteFlags::empty()).is_ok()
+            if txn.put(db, &key, value, WriteFlags::empty()).is_ok()
                 && !inserted.contains(value)
             {
                 inserted.push(value.clone());
@@ -950,7 +950,7 @@ proptest! {
 
         let mut inserted: Vec<Vec<u8>> = Vec::new();
         for value in &values {
-            if txn.put(db.dbi(), &key, value, WriteFlags::empty()).is_ok()
+            if txn.put(db, &key, value, WriteFlags::empty()).is_ok()
                 && !inserted.contains(value)
             {
                 inserted.push(value.clone());
@@ -994,7 +994,7 @@ proptest! {
         // Insert all entries
         let mut inserted_keys: Vec<Vec<u8>> = Vec::new();
         for (key, value) in &entries {
-            if txn.put(db.dbi(), key, value, WriteFlags::empty()).is_ok()
+            if txn.put(db, key, value, WriteFlags::empty()).is_ok()
                 && !inserted_keys.contains(key)
             {
                 inserted_keys.push(key.clone());
@@ -1038,7 +1038,7 @@ proptest! {
 
         let mut inserted_keys: Vec<Vec<u8>> = Vec::new();
         for (key, value) in &entries {
-            if txn.put(db.dbi(), key, value, WriteFlags::empty()).is_ok()
+            if txn.put(db, key, value, WriteFlags::empty()).is_ok()
                 && !inserted_keys.contains(key)
             {
                 inserted_keys.push(key.clone());
@@ -1076,7 +1076,7 @@ proptest! {
         let txn = env.begin_rw_txn().unwrap();
         let db = txn.open_db(None).unwrap();
 
-        let put_result = txn.put(db.dbi(), &key, &value, WriteFlags::empty());
+        let put_result = txn.put(db, &key, &value, WriteFlags::empty());
         if put_result.is_ok() {
             let mut cursor = txn.cursor(db).unwrap();
             let retrieved: Option<Vec<u8>> = cursor.set(&key).unwrap();
@@ -1100,7 +1100,7 @@ proptest! {
         let mut txn = env.begin_rw_unsync().unwrap();
         let db = txn.open_db(None).unwrap();
 
-        let put_result = txn.put(db.dbi(), &key, &value, WriteFlags::empty());
+        let put_result = txn.put(db, &key, &value, WriteFlags::empty());
         if put_result.is_ok() {
             let mut cursor = txn.cursor(db).unwrap();
             let retrieved: Option<Vec<u8>> = cursor.set(&key).unwrap();
@@ -1129,7 +1129,7 @@ proptest! {
 
         let mut inserted: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
         for (key, value) in &entries {
-            if txn.put(db.dbi(), key, value, WriteFlags::empty()).is_ok() {
+            if txn.put(db, key, value, WriteFlags::empty()).is_ok() {
                 inserted.push((key.clone(), value.clone()));
             }
         }
@@ -1172,7 +1172,7 @@ proptest! {
 
         let mut inserted: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
         for (key, value) in &entries {
-            if txn.put(db.dbi(), key, value, WriteFlags::empty()).is_ok() {
+            if txn.put(db, key, value, WriteFlags::empty()).is_ok() {
                 inserted.push((key.clone(), value.clone()));
             }
         }

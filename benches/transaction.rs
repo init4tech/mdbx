@@ -64,18 +64,15 @@ fn bench_put_rand(c: &mut Criterion) {
     let n = 100u32;
     let (_dir, env) = setup_bench_db(0);
 
-    let txn = env.begin_ro_txn().unwrap();
-    let db = txn.open_db(None).unwrap();
-    let dbi = db.dbi();
-
     let mut items: Vec<(String, String)> = (0..n).map(|n| (get_key(n), get_data(n))).collect();
     items.shuffle(&mut StdRng::from_seed(Default::default()));
 
     c.bench_function("transaction::put::rand", |b| {
         b.iter(|| {
             let txn = env.begin_rw_txn().unwrap();
+            let db = txn.open_db(None).unwrap();
             for (key, data) in &items {
-                txn.put(dbi, key, data, WriteFlags::empty()).unwrap();
+                txn.put(db, key, data, WriteFlags::empty()).unwrap();
             }
         })
     });
@@ -139,18 +136,15 @@ fn bench_put_rand_unsync(c: &mut Criterion) {
     let n = 100u32;
     let (_dir, env) = setup_bench_db(0);
 
-    let txn = env.begin_ro_txn().unwrap();
-    let db = txn.open_db(None).unwrap();
-    let dbi = db.dbi();
-
     let mut items: Vec<(String, String)> = (0..n).map(|n| (get_key(n), get_data(n))).collect();
     items.shuffle(&mut StdRng::from_seed(Default::default()));
 
     c.bench_function("transaction::put::rand::single_thread", |b| {
         b.iter(|| {
             let mut txn = env.begin_rw_unsync().unwrap();
+            let db = txn.open_db(None).unwrap();
             for (key, data) in &items {
-                txn.put(dbi, key, data, WriteFlags::empty()).unwrap();
+                txn.put(db, key, data, WriteFlags::empty()).unwrap();
             }
         })
     });

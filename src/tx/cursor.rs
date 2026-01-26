@@ -3,7 +3,7 @@ use crate::{
     error::{MdbxResult, mdbx_result},
     flags::*,
     tx::{
-        TxPtrAccess,
+        TxPtrAccess, assertions,
         iter::{Iter, IterDup, IterDupVals, IterKeyVals},
     },
 };
@@ -131,16 +131,10 @@ where
     }
 
     /// Debug assertion that validates INTEGER_KEY constraints.
-    #[inline]
+    #[inline(always)]
     fn debug_assert_integer_key(&self, key: Option<&[u8]>) {
         if let Some(k) = key {
-            debug_assert!(
-                !self.db.flags().contains(DatabaseFlags::INTEGER_KEY)
-                    || k.len() == 4
-                    || k.len() == 8,
-                "INTEGER_KEY database requires key length of 4 or 8 bytes, got {}",
-                k.len()
-            );
+            assertions::debug_assert_integer_key(self.db.flags(), k);
         }
     }
 
@@ -623,7 +617,23 @@ where
     /// Puts a key/data pair into the database. The cursor will be positioned at
     /// the new data item, or on failure usually near it.
     pub fn put(&mut self, key: &[u8], data: &[u8], flags: WriteFlags) -> MdbxResult<()> {
-        self.debug_assert_integer_key(Some(key));
+        #[cfg(debug_assertions)]
+        self.access.with_txn_ptr(|txn_ptr| {
+            // SAFETY: txn_ptr is valid, getting env and stat for assertion only
+            let env_ptr = unsafe { ffi::mdbx_txn_env(txn_ptr) };
+            let mut stat: ffi::MDBX_stat = unsafe { std::mem::zeroed() };
+            unsafe {
+                ffi::mdbx_env_stat_ex(
+                    env_ptr,
+                    std::ptr::null(),
+                    &mut stat,
+                    std::mem::size_of::<ffi::MDBX_stat>(),
+                )
+            };
+            let pagesize = stat.ms_psize as usize;
+            assertions::debug_assert_put(pagesize, self.db.flags(), key, data);
+        })?;
+
         let key_val: ffi::MDBX_val =
             ffi::MDBX_val { iov_len: key.len(), iov_base: key.as_ptr() as *mut c_void };
         let mut data_val: ffi::MDBX_val =

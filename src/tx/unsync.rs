@@ -24,6 +24,8 @@
 //!   they stay on the creating thread. No mutex needed since RW transactions
 //!   are single-threaded.
 
+#[cfg(debug_assertions)]
+use crate::tx::assertions;
 use crate::{
     CommitLatency, Database, Environment, MdbxError, RO, RW, ReadResult, Stat, TableObject,
     TransactionKind,
@@ -319,16 +321,23 @@ impl TxUnsync<RW> {
     /// Stores an item into a database.
     pub fn put(
         &mut self,
-        dbi: ffi::MDBX_dbi,
+        db: Database,
         key: impl AsRef<[u8]>,
         data: impl AsRef<[u8]>,
         flags: WriteFlags,
     ) -> MdbxResult<()> {
         let key = key.as_ref();
         let data = data.as_ref();
+
+        #[cfg(debug_assertions)]
+        {
+            let pagesize = self.env().stat().map(|s| s.page_size() as usize).unwrap_or(4096);
+            assertions::debug_assert_put(pagesize, db.flags(), key, data);
+        }
+
         self.with_txn_ptr(|txn_ptr| {
             // SAFETY: txn_ptr is valid from with_txn_ptr.
-            unsafe { ops::put_raw(txn_ptr, dbi, key, data, flags) }
+            unsafe { ops::put_raw(txn_ptr, db.dbi(), key, data, flags) }
         })?
     }
 
@@ -341,15 +350,22 @@ impl TxUnsync<RW> {
     #[allow(clippy::mut_from_ref)]
     pub unsafe fn reserve(
         &mut self,
-        dbi: ffi::MDBX_dbi,
+        db: Database,
         key: impl AsRef<[u8]>,
         len: usize,
         flags: WriteFlags,
     ) -> MdbxResult<&mut [u8]> {
         let key = key.as_ref();
+
+        #[cfg(debug_assertions)]
+        {
+            let pagesize = self.env().stat().map(|s| s.page_size() as usize).unwrap_or(4096);
+            assertions::debug_assert_key(pagesize, db.flags(), key);
+        }
+
         let ptr = self.with_txn_ptr(|txn_ptr| {
             // SAFETY: txn_ptr is valid from with_txn_ptr.
-            unsafe { ops::reserve_raw(txn_ptr, dbi, key, len, flags) }
+            unsafe { ops::reserve_raw(txn_ptr, db.dbi(), key, len, flags) }
         })??;
         // SAFETY: ptr is valid from reserve_raw, len matches.
         Ok(unsafe { ops::slice_from_reserved(ptr, len) })
@@ -358,14 +374,14 @@ impl TxUnsync<RW> {
     /// Reserves space and calls the closure to write into it.
     pub fn with_reservation(
         &mut self,
-        dbi: ffi::MDBX_dbi,
+        db: Database,
         key: impl AsRef<[u8]>,
         len: usize,
         flags: WriteFlags,
         f: impl FnOnce(&mut [u8]),
     ) -> MdbxResult<()> {
         // SAFETY: We ensure the buffer is written to before any other operation.
-        let buf = unsafe { self.reserve(dbi, key, len, flags)? };
+        let buf = unsafe { self.reserve(db, key, len, flags)? };
         f(buf);
         Ok(())
     }
@@ -373,22 +389,32 @@ impl TxUnsync<RW> {
     /// Deletes items from a database.
     pub fn del(
         &mut self,
-        dbi: ffi::MDBX_dbi,
+        db: Database,
         key: impl AsRef<[u8]>,
         data: Option<&[u8]>,
     ) -> MdbxResult<bool> {
         let key = key.as_ref();
+
+        #[cfg(debug_assertions)]
+        {
+            let pagesize = self.env().stat().map(|s| s.page_size() as usize).unwrap_or(4096);
+            assertions::debug_assert_key(pagesize, db.flags(), key);
+            if let Some(v) = data {
+                assertions::debug_assert_value(pagesize, db.flags(), v);
+            }
+        }
+
         self.with_txn_ptr(|txn_ptr| {
             // SAFETY: txn_ptr is valid from with_txn_ptr.
-            unsafe { ops::del_raw(txn_ptr, dbi, key, data) }
+            unsafe { ops::del_raw(txn_ptr, db.dbi(), key, data) }
         })?
     }
 
     /// Empties the given database.
-    pub fn clear_db(&mut self, dbi: ffi::MDBX_dbi) -> MdbxResult<()> {
+    pub fn clear_db(&mut self, db: Database) -> MdbxResult<()> {
         self.with_txn_ptr(|txn_ptr| {
             // SAFETY: txn_ptr is valid from with_txn_ptr.
-            unsafe { ops::clear_db_raw(txn_ptr, dbi) }
+            unsafe { ops::clear_db_raw(txn_ptr, db.dbi()) }
         })?
     }
 
@@ -398,12 +424,12 @@ impl TxUnsync<RW> {
     ///
     /// Caller must ensure all other Database and Cursor instances pointing
     /// to this dbi are closed before calling.
-    pub unsafe fn drop_db(&mut self, dbi: ffi::MDBX_dbi) -> MdbxResult<()> {
+    pub unsafe fn drop_db(&mut self, db: Database) -> MdbxResult<()> {
         self.with_txn_ptr(|txn_ptr| {
             // SAFETY: Caller ensures no other references exist.
-            unsafe { ops::drop_db_raw(txn_ptr, dbi) }
+            unsafe { ops::drop_db_raw(txn_ptr, db.dbi()) }
         })??;
-        self.meta.db_cache.remove_dbi(dbi);
+        self.meta.db_cache.remove_dbi(db.dbi());
         Ok(())
     }
 }
@@ -443,8 +469,8 @@ mod tests {
         // Write data
         let mut txn = TxUnsync::<RW>::new(env.clone()).unwrap();
         let db = txn.create_db(None, DatabaseFlags::empty()).unwrap();
-        txn.put(db.dbi(), b"key1", b"value1", WriteFlags::empty()).unwrap();
-        txn.put(db.dbi(), b"key2", b"value2", WriteFlags::empty()).unwrap();
+        txn.put(db, b"key1", b"value1", WriteFlags::empty()).unwrap();
+        txn.put(db, b"key2", b"value2", WriteFlags::empty()).unwrap();
         txn.commit().unwrap();
 
         // Read data

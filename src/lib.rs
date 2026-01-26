@@ -36,7 +36,7 @@
 //!     // Write data in a read-write transaction
 //!     let txn = env.begin_rw_txn()?;
 //!     let db = txn.create_db(None, DatabaseFlags::empty())?;
-//!     txn.put(db.dbi(), b"hello", b"world", WriteFlags::empty())?;
+//!     txn.put(db, b"hello", b"world", WriteFlags::empty())?;
 //!     txn.commit()?;
 //!
 //!     // Read data in a read-only transaction
@@ -186,7 +186,7 @@ mod test {
             LittleEndian::write_u64(&mut value, height);
             let tx = env.begin_rw_txn().expect("begin_rw_txn");
             let index = tx.create_db(None, DatabaseFlags::DUP_SORT).expect("open index db");
-            tx.put(index.dbi(), HEIGHT_KEY, value, WriteFlags::empty()).expect("tx.put");
+            tx.put(index, HEIGHT_KEY, value, WriteFlags::empty()).expect("tx.put");
             tx.commit().expect("tx.commit");
         }
     }

@@ -1,3 +1,5 @@
+#[cfg(debug_assertions)]
+use crate::tx::assertions;
 use crate::{
     Cursor, Database, Environment, MdbxError, RO, RW, ReadResult, Stat, TableObject,
     TransactionKind,
@@ -345,16 +347,23 @@ impl TxSync<RW> {
     /// item if duplicates are allowed ([`DatabaseFlags::DUP_SORT`]).
     pub fn put(
         &self,
-        dbi: ffi::MDBX_dbi,
+        db: Database,
         key: impl AsRef<[u8]>,
         data: impl AsRef<[u8]>,
         flags: WriteFlags,
     ) -> MdbxResult<()> {
         let key = key.as_ref();
         let data = data.as_ref();
+
+        #[cfg(debug_assertions)]
+        {
+            let pagesize = self.env().stat().map(|s| s.page_size() as usize).unwrap_or(4096);
+            assertions::debug_assert_put(pagesize, db.flags(), key, data);
+        }
+
         self.txn_execute(|txn| {
             // SAFETY: txn is a valid RW transaction pointer from txn_execute.
-            unsafe { ops::put_raw(txn, dbi, key, data, flags) }
+            unsafe { ops::put_raw(txn, db.dbi(), key, data, flags) }
         })?
     }
 
@@ -373,15 +382,22 @@ impl TxSync<RW> {
     #[allow(clippy::mut_from_ref)]
     pub unsafe fn reserve(
         &self,
-        dbi: ffi::MDBX_dbi,
+        db: Database,
         key: impl AsRef<[u8]>,
         len: usize,
         flags: WriteFlags,
     ) -> MdbxResult<&mut [u8]> {
         let key = key.as_ref();
+
+        #[cfg(debug_assertions)]
+        {
+            let pagesize = self.env().stat().map(|s| s.page_size() as usize).unwrap_or(4096);
+            assertions::debug_assert_key(pagesize, db.flags(), key);
+        }
+
         let ptr = self.txn_execute(|txn| {
             // SAFETY: txn is a valid RW transaction pointer from txn_execute.
-            unsafe { ops::reserve_raw(txn, dbi, key, len, flags) }
+            unsafe { ops::reserve_raw(txn, db.dbi(), key, len, flags) }
         })??;
         // SAFETY: ptr is valid from reserve_raw, len matches.
         Ok(unsafe { ops::slice_from_reserved(ptr, len) })
@@ -393,13 +409,13 @@ impl TxSync<RW> {
     /// This is a safe wrapper around [`TxSync::reserve`].
     pub fn with_reservation(
         &self,
-        dbi: ffi::MDBX_dbi,
+        db: Database,
         key: impl AsRef<[u8]>,
         len: usize,
         flags: WriteFlags,
         f: impl FnOnce(&mut [u8]),
     ) -> MdbxResult<()> {
-        let buf = unsafe { self.reserve(dbi, key, len, flags)? };
+        let buf = unsafe { self.reserve(db, key, len, flags)? };
         f(buf);
         Ok(())
     }
@@ -416,22 +432,32 @@ impl TxSync<RW> {
     /// Returns `true` if the key/value pair was present.
     pub fn del(
         &self,
-        dbi: ffi::MDBX_dbi,
+        db: Database,
         key: impl AsRef<[u8]>,
         data: Option<&[u8]>,
     ) -> MdbxResult<bool> {
         let key = key.as_ref();
+
+        #[cfg(debug_assertions)]
+        {
+            let pagesize = self.env().stat().map(|s| s.page_size() as usize).unwrap_or(4096);
+            assertions::debug_assert_key(pagesize, db.flags(), key);
+            if let Some(v) = data {
+                assertions::debug_assert_value(pagesize, db.flags(), v);
+            }
+        }
+
         self.txn_execute(|txn| {
             // SAFETY: txn is a valid RW transaction pointer from txn_execute.
-            unsafe { ops::del_raw(txn, dbi, key, data) }
+            unsafe { ops::del_raw(txn, db.dbi(), key, data) }
         })?
     }
 
     /// Empties the given database. All items will be removed.
-    pub fn clear_db(&self, dbi: ffi::MDBX_dbi) -> MdbxResult<()> {
+    pub fn clear_db(&self, db: Database) -> MdbxResult<()> {
         self.txn_execute(|txn| {
             // SAFETY: txn is a valid RW transaction pointer from txn_execute.
-            unsafe { ops::clear_db_raw(txn, dbi) }
+            unsafe { ops::clear_db_raw(txn, db.dbi()) }
         })?
     }
 
@@ -440,14 +466,14 @@ impl TxSync<RW> {
     /// # Safety
     /// Caller must close ALL other [Database] and [Cursor] instances pointing
     /// to the same dbi BEFORE calling this function.
-    pub unsafe fn drop_db(&self, dbi: ffi::MDBX_dbi) -> MdbxResult<()> {
+    pub unsafe fn drop_db(&self, db: Database) -> MdbxResult<()> {
         self.txn_execute(|txn| {
             // SAFETY: txn is a valid RW transaction pointer, caller ensures
             // no other references to dbi exist.
-            unsafe { ops::drop_db_raw(txn, dbi) }
+            unsafe { ops::drop_db_raw(txn, db.dbi()) }
         })??;
 
-        self.inner.db_cache.remove_dbi(dbi);
+        self.inner.db_cache.remove_dbi(db.dbi());
 
         Ok(())
     }

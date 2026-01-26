@@ -27,6 +27,7 @@
 mod access;
 pub(crate) use access::PtrSync;
 pub use access::{PtrSyncInner, RoGuard, RwUnsync, TxPtrAccess};
+mod assertions;
 
 mod cache;
 pub(crate) use cache::{CachedDb, SharedCache};

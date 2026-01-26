@@ -22,15 +22,9 @@ pub trait TestRwTxn: Sized {
         dbi: ffi::MDBX_dbi,
         key: &[u8],
     ) -> ReadResult<Option<T>>;
-    fn put(
-        &mut self,
-        dbi: ffi::MDBX_dbi,
-        key: &[u8],
-        data: &[u8],
-        flags: WriteFlags,
-    ) -> MdbxResult<()>;
-    fn del(&mut self, dbi: ffi::MDBX_dbi, key: &[u8], data: Option<&[u8]>) -> MdbxResult<bool>;
-    fn clear_db(&mut self, dbi: ffi::MDBX_dbi) -> MdbxResult<()>;
+    fn put(&mut self, db: Database, key: &[u8], data: &[u8], flags: WriteFlags) -> MdbxResult<()>;
+    fn del(&mut self, db: Database, key: &[u8], data: Option<&[u8]>) -> MdbxResult<bool>;
+    fn clear_db(&mut self, db: Database) -> MdbxResult<()>;
     fn commit(self) -> MdbxResult<()>;
     fn cursor(&self, db: Database) -> MdbxResult<Cursor<'_, RW, Self::CursorAccess>>;
     fn db_stat(&mut self, dbi: ffi::MDBX_dbi) -> MdbxResult<Stat>;
@@ -38,7 +32,7 @@ pub trait TestRwTxn: Sized {
     /// # Safety
     /// Caller must close all other Database and Cursor instances pointing to
     /// this dbi before calling.
-    unsafe fn drop_db(&mut self, dbi: ffi::MDBX_dbi) -> MdbxResult<()>;
+    unsafe fn drop_db(&mut self, db: Database) -> MdbxResult<()>;
 }
 
 /// Trait for read-only transaction operations used in tests.
@@ -80,22 +74,16 @@ impl TestRwTxn for TxSync<RW> {
         TxSync::get(self, dbi, key)
     }
 
-    fn put(
-        &mut self,
-        dbi: ffi::MDBX_dbi,
-        key: &[u8],
-        data: &[u8],
-        flags: WriteFlags,
-    ) -> MdbxResult<()> {
-        TxSync::put(self, dbi, key, data, flags)
+    fn put(&mut self, db: Database, key: &[u8], data: &[u8], flags: WriteFlags) -> MdbxResult<()> {
+        TxSync::put(self, db, key, data, flags)
     }
 
-    fn del(&mut self, dbi: ffi::MDBX_dbi, key: &[u8], data: Option<&[u8]>) -> MdbxResult<bool> {
-        TxSync::del(self, dbi, key, data)
+    fn del(&mut self, db: Database, key: &[u8], data: Option<&[u8]>) -> MdbxResult<bool> {
+        TxSync::del(self, db, key, data)
     }
 
-    fn clear_db(&mut self, dbi: ffi::MDBX_dbi) -> MdbxResult<()> {
-        TxSync::clear_db(self, dbi)
+    fn clear_db(&mut self, db: Database) -> MdbxResult<()> {
+        TxSync::clear_db(self, db)
     }
 
     fn commit(self) -> MdbxResult<()> {
@@ -110,9 +98,9 @@ impl TestRwTxn for TxSync<RW> {
         TxSync::db_stat(self, dbi)
     }
 
-    unsafe fn drop_db(&mut self, dbi: ffi::MDBX_dbi) -> MdbxResult<()> {
+    unsafe fn drop_db(&mut self, db: Database) -> MdbxResult<()> {
         // SAFETY: Caller ensures no other references to dbi exist.
-        unsafe { TxSync::drop_db(self, dbi) }
+        unsafe { TxSync::drop_db(self, db) }
     }
 }
 
@@ -167,22 +155,16 @@ impl TestRwTxn for unsync::TxUnsync<RW> {
         unsync::TxUnsync::get(self, dbi, key)
     }
 
-    fn put(
-        &mut self,
-        dbi: ffi::MDBX_dbi,
-        key: &[u8],
-        data: &[u8],
-        flags: WriteFlags,
-    ) -> MdbxResult<()> {
-        unsync::TxUnsync::put(self, dbi, key, data, flags)
+    fn put(&mut self, db: Database, key: &[u8], data: &[u8], flags: WriteFlags) -> MdbxResult<()> {
+        unsync::TxUnsync::put(self, db, key, data, flags)
     }
 
-    fn del(&mut self, dbi: ffi::MDBX_dbi, key: &[u8], data: Option<&[u8]>) -> MdbxResult<bool> {
-        unsync::TxUnsync::del(self, dbi, key, data)
+    fn del(&mut self, db: Database, key: &[u8], data: Option<&[u8]>) -> MdbxResult<bool> {
+        unsync::TxUnsync::del(self, db, key, data)
     }
 
-    fn clear_db(&mut self, dbi: ffi::MDBX_dbi) -> MdbxResult<()> {
-        unsync::TxUnsync::clear_db(self, dbi)
+    fn clear_db(&mut self, db: Database) -> MdbxResult<()> {
+        unsync::TxUnsync::clear_db(self, db)
     }
 
     fn commit(self) -> MdbxResult<()> {
@@ -197,9 +179,9 @@ impl TestRwTxn for unsync::TxUnsync<RW> {
         unsync::TxUnsync::db_stat(self, dbi)
     }
 
-    unsafe fn drop_db(&mut self, dbi: ffi::MDBX_dbi) -> MdbxResult<()> {
+    unsafe fn drop_db(&mut self, db: Database) -> MdbxResult<()> {
         // SAFETY: Caller ensures no other references to dbi exist.
-        unsafe { unsync::TxUnsync::drop_db(self, dbi) }
+        unsafe { unsync::TxUnsync::drop_db(self, db) }
     }
 }
 

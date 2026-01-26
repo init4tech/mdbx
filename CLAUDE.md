@@ -3,13 +3,6 @@
 Include updates to the notes here if you discover important details while
 working, or if the notes become outdated.
 
-## Current TODOs:
-
-Update these when we identify new TODOs while working on the crate. Remove them
-we when complete them.
-
-- [ ] bench adapted cursors against eachother
-
 ## Crate Overview
 
 Rust bindings for libmdbx (MDBX database). Crate name: `signet-libmdbx`.

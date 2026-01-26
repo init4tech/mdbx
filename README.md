@@ -10,6 +10,9 @@ NOTE: Most of the repo came from [lmdb-rs bindings].
 ## Differences from reth-libmdbx
 
 - Improve documentation :)
+- Add [`TxUnsync`] type for single-threaded transactions.
+  - These may be up to 3x faster than the thread-safe versions.
+- Rename [`Transaction`] to [`TxSync`] for clarity.
 - Improve support for custom `TableObject` types.
   - Added `TableObjectOwned` trait to represent types that can be deserialized
     from a database table without borrowing.

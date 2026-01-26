@@ -288,3 +288,137 @@ pub(crate) unsafe fn is_dirty_raw(
     // SAFETY: Caller guarantees txn and ptr are valid.
     mdbx_result(unsafe { ffi::mdbx_is_dirty(txn, ptr) })
 }
+
+// =============================================================================
+// Debug-only helpers for append assertions
+// =============================================================================
+
+/// Gets pagesize from transaction environment.
+///
+/// # Safety
+///
+/// - `txn` must be a valid, non-null transaction pointer.
+#[cfg(debug_assertions)]
+unsafe fn get_pagesize(txn: *mut ffi::MDBX_txn) -> usize {
+    // SAFETY: Caller guarantees txn is valid.
+    let env_ptr = unsafe { ffi::mdbx_txn_env(txn) };
+    let mut stat: ffi::MDBX_stat = unsafe { std::mem::zeroed() };
+    // SAFETY: env_ptr is valid from mdbx_txn_env.
+    unsafe { ffi::mdbx_env_stat_ex(env_ptr, ptr::null(), &mut stat, size_of::<ffi::MDBX_stat>()) };
+    stat.ms_psize as usize
+}
+
+/// Gets last key from database using a temporary cursor.
+///
+/// # Safety
+///
+/// - `txn` must be a valid, non-null transaction pointer.
+/// - `dbi` must be a valid database handle for this transaction.
+#[cfg(debug_assertions)]
+unsafe fn get_last_key(txn: *mut ffi::MDBX_txn, dbi: ffi::MDBX_dbi) -> Option<Vec<u8>> {
+    let mut cursor: *mut ffi::MDBX_cursor = ptr::null_mut();
+    // SAFETY: Caller guarantees txn and dbi are valid.
+    if unsafe { ffi::mdbx_cursor_open(txn, dbi, &mut cursor) } != ffi::MDBX_SUCCESS {
+        return None;
+    }
+    let mut key_val = ffi::MDBX_val { iov_len: 0, iov_base: ptr::null_mut() };
+    let mut data_val = ffi::MDBX_val { iov_len: 0, iov_base: ptr::null_mut() };
+    // SAFETY: cursor was just opened successfully.
+    let result =
+        if unsafe { ffi::mdbx_cursor_get(cursor, &mut key_val, &mut data_val, ffi::MDBX_LAST) }
+            == ffi::MDBX_SUCCESS
+        {
+            // SAFETY: mdbx_cursor_get returned success, so key_val is valid.
+            Some(unsafe {
+                slice::from_raw_parts(key_val.iov_base as *const u8, key_val.iov_len).to_vec()
+            })
+        } else {
+            None
+        };
+    // SAFETY: cursor is valid.
+    unsafe { ffi::mdbx_cursor_close(cursor) };
+    result
+}
+
+/// Gets last dup for a key using a temporary cursor.
+///
+/// # Safety
+///
+/// - `txn` must be a valid, non-null transaction pointer.
+/// - `dbi` must be a valid database handle for this transaction.
+#[cfg(debug_assertions)]
+unsafe fn get_last_dup(txn: *mut ffi::MDBX_txn, dbi: ffi::MDBX_dbi, key: &[u8]) -> Option<Vec<u8>> {
+    let mut cursor: *mut ffi::MDBX_cursor = ptr::null_mut();
+    // SAFETY: Caller guarantees txn and dbi are valid.
+    if unsafe { ffi::mdbx_cursor_open(txn, dbi, &mut cursor) } != ffi::MDBX_SUCCESS {
+        return None;
+    }
+    let mut key_val = ffi::MDBX_val { iov_len: key.len(), iov_base: key.as_ptr() as *mut c_void };
+    let mut data_val = ffi::MDBX_val { iov_len: 0, iov_base: ptr::null_mut() };
+
+    // SAFETY: cursor was just opened successfully.
+    let result =
+        if unsafe { ffi::mdbx_cursor_get(cursor, &mut key_val, &mut data_val, ffi::MDBX_SET) }
+            == ffi::MDBX_SUCCESS
+        {
+            // SAFETY: cursor is positioned at key.
+            if unsafe {
+                ffi::mdbx_cursor_get(cursor, &mut key_val, &mut data_val, ffi::MDBX_LAST_DUP)
+            } == ffi::MDBX_SUCCESS
+            {
+                // SAFETY: mdbx_cursor_get returned success, so data_val is valid.
+                Some(unsafe {
+                    slice::from_raw_parts(data_val.iov_base as *const u8, data_val.iov_len).to_vec()
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+    // SAFETY: cursor is valid.
+    unsafe { ffi::mdbx_cursor_close(cursor) };
+    result
+}
+
+/// All-in-one append assertion: opens cursor, gets last key, asserts, closes cursor.
+///
+/// # Safety
+///
+/// - `txn` must be a valid, non-null transaction pointer.
+/// - `dbi` must be a valid database handle for this transaction.
+#[cfg(debug_assertions)]
+pub(crate) unsafe fn debug_assert_append(
+    txn: *mut ffi::MDBX_txn,
+    dbi: ffi::MDBX_dbi,
+    flags: DatabaseFlags,
+    key: &[u8],
+    data: &[u8],
+) {
+    // SAFETY: Caller guarantees txn is valid.
+    let pagesize = unsafe { get_pagesize(txn) };
+    // SAFETY: Caller guarantees txn and dbi are valid.
+    let last_key = unsafe { get_last_key(txn, dbi) };
+    super::assertions::debug_assert_append(pagesize, flags, key, data, last_key.as_deref());
+}
+
+/// All-in-one append_dup assertion: opens cursor, gets last dup, asserts, closes cursor.
+///
+/// # Safety
+///
+/// - `txn` must be a valid, non-null transaction pointer.
+/// - `dbi` must be a valid database handle for this transaction.
+#[cfg(debug_assertions)]
+pub(crate) unsafe fn debug_assert_append_dup(
+    txn: *mut ffi::MDBX_txn,
+    dbi: ffi::MDBX_dbi,
+    flags: DatabaseFlags,
+    key: &[u8],
+    data: &[u8],
+) {
+    // SAFETY: Caller guarantees txn is valid.
+    let pagesize = unsafe { get_pagesize(txn) };
+    // SAFETY: Caller guarantees txn and dbi are valid.
+    let last_dup = unsafe { get_last_dup(txn, dbi, key) };
+    super::assertions::debug_assert_append_dup(pagesize, flags, key, data, last_dup.as_deref());
+}

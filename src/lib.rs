@@ -99,6 +99,21 @@
 //!
 //! See the [`TableObject`] docs for more examples.
 //!
+//! # Debug assertions
+//!
+//! When compiled with debug assertions enabled (the default for
+//! `cargo build`), this crate performs additional runtime checks to
+//! catch common mistakes.
+//!
+//! 1. Key sizes are checked against the database's configured
+//!   `pagesize` and `DatabaseFlags` (e.g. `INTEGERKEY`).
+//! 2. Value sizes are checked against the database's configured
+//!   `pagesize` and `DatabaseFlags` (e.g. `INTEGERDUP`).
+//! 3. For `append` operations, it checks that the key being appended is
+//!    in fact the last key in the database, respected `REVERSE_KEY` and
+//!    `REVERSE_DUP` flags if set.
+//! 4.
+//!
 //! # Provenance
 //!
 //! Forked from [reth-libmdbx], which was forked from an earlier Apache

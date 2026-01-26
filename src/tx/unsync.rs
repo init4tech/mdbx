@@ -341,6 +341,70 @@ impl TxUnsync<RW> {
         })?
     }
 
+    /// Appends a key/data pair to the end of the database.
+    ///
+    /// The key must be greater than all existing keys (or less than, for
+    /// [`DatabaseFlags::REVERSE_KEY`] tables). This is more efficient than
+    /// [`TxUnsync::put`] when adding data in sorted order.
+    ///
+    /// In debug builds, this method asserts that the key ordering constraint is
+    /// satisfied.
+    pub fn append(
+        &mut self,
+        db: Database,
+        key: impl AsRef<[u8]>,
+        data: impl AsRef<[u8]>,
+    ) -> MdbxResult<()> {
+        let key = key.as_ref();
+        let data = data.as_ref();
+
+        self.with_txn_ptr(|txn_ptr| {
+            #[cfg(debug_assertions)]
+            // SAFETY: txn_ptr is valid from with_txn_ptr.
+            unsafe {
+                ops::debug_assert_append(txn_ptr, db.dbi(), db.flags(), key, data);
+            }
+
+            // SAFETY: txn_ptr is valid from with_txn_ptr.
+            unsafe { ops::put_raw(txn_ptr, db.dbi(), key, data, WriteFlags::APPEND) }
+        })?
+    }
+
+    /// Appends duplicate data for [`DatabaseFlags::DUP_SORT`] databases.
+    ///
+    /// The data must be greater than all existing data for this key (or less
+    /// than, for [`DatabaseFlags::REVERSE_DUP`] tables). This is more efficient
+    /// than [`TxUnsync::put`] when adding duplicates in sorted order.
+    ///
+    /// Returns [`MdbxError::RequiresDupSort`] if the database does not have the
+    /// [`DatabaseFlags::DUP_SORT`] flag set.
+    ///
+    /// In debug builds, this method asserts that the data ordering constraint
+    /// is satisfied.
+    pub fn append_dup(
+        &mut self,
+        db: Database,
+        key: impl AsRef<[u8]>,
+        data: impl AsRef<[u8]>,
+    ) -> MdbxResult<()> {
+        if !db.flags().contains(DatabaseFlags::DUP_SORT) {
+            return Err(MdbxError::RequiresDupSort);
+        }
+        let key = key.as_ref();
+        let data = data.as_ref();
+
+        self.with_txn_ptr(|txn_ptr| {
+            #[cfg(debug_assertions)]
+            // SAFETY: txn_ptr is valid from with_txn_ptr.
+            unsafe {
+                ops::debug_assert_append_dup(txn_ptr, db.dbi(), db.flags(), key, data);
+            }
+
+            // SAFETY: txn_ptr is valid from with_txn_ptr.
+            unsafe { ops::put_raw(txn_ptr, db.dbi(), key, data, WriteFlags::APPEND_DUP) }
+        })?
+    }
+
     /// Reserves space for a value and returns a mutable slice to write into.
     ///
     /// # Safety

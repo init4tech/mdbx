@@ -367,6 +367,70 @@ impl TxSync<RW> {
         })?
     }
 
+    /// Appends a key/data pair to the end of the database.
+    ///
+    /// The key must be greater than all existing keys (or less than, for
+    /// [`DatabaseFlags::REVERSE_KEY`] tables). This is more efficient than
+    /// [`TxSync::put`] when adding data in sorted order.
+    ///
+    /// In debug builds, this method asserts that the key ordering constraint is
+    /// satisfied.
+    pub fn append(
+        &self,
+        db: Database,
+        key: impl AsRef<[u8]>,
+        data: impl AsRef<[u8]>,
+    ) -> MdbxResult<()> {
+        let key = key.as_ref();
+        let data = data.as_ref();
+
+        self.txn_execute(|txn| {
+            #[cfg(debug_assertions)]
+            // SAFETY: txn is a valid RW transaction pointer from txn_execute.
+            unsafe {
+                ops::debug_assert_append(txn, db.dbi(), db.flags(), key, data);
+            }
+
+            // SAFETY: txn is a valid RW transaction pointer from txn_execute.
+            unsafe { ops::put_raw(txn, db.dbi(), key, data, WriteFlags::APPEND) }
+        })?
+    }
+
+    /// Appends duplicate data for [`DatabaseFlags::DUP_SORT`] databases.
+    ///
+    /// The data must be greater than all existing data for this key (or less
+    /// than, for [`DatabaseFlags::REVERSE_DUP`] tables). This is more efficient
+    /// than [`TxSync::put`] when adding duplicates in sorted order.
+    ///
+    /// Returns [`MdbxError::RequiresDupSort`] if the database does not have the
+    /// [`DatabaseFlags::DUP_SORT`] flag set.
+    ///
+    /// In debug builds, this method asserts that the data ordering constraint
+    /// is satisfied.
+    pub fn append_dup(
+        &self,
+        db: Database,
+        key: impl AsRef<[u8]>,
+        data: impl AsRef<[u8]>,
+    ) -> MdbxResult<()> {
+        if !db.flags().contains(DatabaseFlags::DUP_SORT) {
+            return Err(MdbxError::RequiresDupSort);
+        }
+        let key = key.as_ref();
+        let data = data.as_ref();
+
+        self.txn_execute(|txn| {
+            #[cfg(debug_assertions)]
+            // SAFETY: txn is a valid RW transaction pointer from txn_execute.
+            unsafe {
+                ops::debug_assert_append_dup(txn, db.dbi(), db.flags(), key, data);
+            }
+
+            // SAFETY: txn is a valid RW transaction pointer from txn_execute.
+            unsafe { ops::put_raw(txn, db.dbi(), key, data, WriteFlags::APPEND_DUP) }
+        })?
+    }
+
     /// Returns a buffer which can be used to write a value into the item at the
     /// given key and with the given length. The buffer must be completely
     /// filled by the caller.

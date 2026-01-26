@@ -988,3 +988,235 @@ mod timeout_tests {
         );
     }
 }
+
+// =============================================================================
+// Append API Tests
+// =============================================================================
+
+fn test_cursor_append_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
+    let dir = tempdir().unwrap();
+    let env = Environment::builder().open(dir.path()).unwrap();
+
+    // Append keys in sorted order: a, b, c
+    let mut txn = begin_rw(&env).unwrap();
+    let db = txn.open_db(None).unwrap();
+    let mut cursor = txn.cursor(db).unwrap();
+
+    cursor.append(b"a", b"val_a").unwrap();
+    cursor.append(b"b", b"val_b").unwrap();
+    cursor.append(b"c", b"val_c").unwrap();
+
+    drop(cursor);
+    txn.commit().unwrap();
+
+    // Verify data was written correctly
+    let mut txn = begin_ro(&env).unwrap();
+    let db = txn.open_db(None).unwrap();
+    let mut cursor = txn.cursor(db).unwrap();
+
+    assert_eq!(cursor.first().unwrap(), Some((*b"a", *b"val_a")));
+    assert_eq!(cursor.next().unwrap(), Some((*b"b", *b"val_b")));
+    assert_eq!(cursor.next().unwrap(), Some((*b"c", *b"val_c")));
+    assert_eq!(cursor.next::<(), ()>().unwrap(), None);
+}
+
+#[test]
+fn test_cursor_append_v1() {
+    test_cursor_append_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_cursor_append_v2() {
+    test_cursor_append_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+fn test_tx_append_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
+    let dir = tempdir().unwrap();
+    let env = Environment::builder().open(dir.path()).unwrap();
+
+    // Write using transaction-level append
+    {
+        let mut txn = begin_rw(&env).unwrap();
+        let db = txn.open_db(None).unwrap();
+
+        txn.append(db, b"key1", b"val1").unwrap();
+        txn.append(db, b"key2", b"val2").unwrap();
+        txn.append(db, b"key3", b"val3").unwrap();
+
+        txn.commit().unwrap();
+    }
+
+    // Verify data was written correctly
+    let mut txn = begin_ro(&env).unwrap();
+    let db = txn.open_db(None).unwrap();
+    let mut cursor = txn.cursor(db).unwrap();
+
+    assert_eq!(cursor.first().unwrap(), Some((*b"key1", *b"val1")));
+    assert_eq!(cursor.next().unwrap(), Some((*b"key2", *b"val2")));
+    assert_eq!(cursor.next().unwrap(), Some((*b"key3", *b"val3")));
+}
+
+#[test]
+fn test_tx_append_v1() {
+    test_tx_append_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_tx_append_v2() {
+    test_tx_append_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+fn test_append_dup_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
+    let dir = tempdir().unwrap();
+    let env = Environment::builder().open(dir.path()).unwrap();
+
+    // Create DUPSORT database and append duplicates
+    let mut txn = begin_rw(&env).unwrap();
+    let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
+    let mut cursor = txn.cursor(db).unwrap();
+
+    // Append duplicates for key "a" in sorted order
+    cursor.append_dup(b"a", b"1").unwrap();
+    cursor.append_dup(b"a", b"2").unwrap();
+    cursor.append_dup(b"a", b"3").unwrap();
+
+    drop(cursor);
+    txn.commit().unwrap();
+
+    // Verify
+    let mut txn = begin_ro(&env).unwrap();
+    let db = txn.open_db(None).unwrap();
+    let mut cursor = txn.cursor(db).unwrap();
+
+    assert_eq!(cursor.first().unwrap(), Some((*b"a", *b"1")));
+    assert_eq!(cursor.next_dup().unwrap(), Some((*b"a", *b"2")));
+    assert_eq!(cursor.next_dup().unwrap(), Some((*b"a", *b"3")));
+    assert_eq!(cursor.next_dup::<(), ()>().unwrap(), None);
+}
+
+#[test]
+fn test_append_dup_v1() {
+    test_append_dup_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_append_dup_v2() {
+    test_append_dup_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+fn test_append_dup_requires_dupsort_impl<RwTx>(begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>)
+where
+    RwTx: TestRwTxn,
+{
+    let dir = tempdir().unwrap();
+    let env = Environment::builder().open(dir.path()).unwrap();
+
+    // Try append_dup on non-DUPSORT database
+    let mut txn = begin_rw(&env).unwrap();
+    let db = txn.open_db(None).unwrap(); // Non-DUPSORT database
+    let mut cursor = txn.cursor(db).unwrap();
+
+    // Should return RequiresDupSort error
+    let err = cursor.append_dup(b"key", b"value").unwrap_err();
+    assert!(matches!(err, MdbxError::RequiresDupSort));
+}
+
+#[test]
+fn test_append_dup_requires_dupsort_v1() {
+    test_append_dup_requires_dupsort_impl(V1Factory::begin_rw);
+}
+
+#[test]
+fn test_append_dup_requires_dupsort_v2() {
+    test_append_dup_requires_dupsort_impl(V2Factory::begin_rw);
+}
+
+// Debug assertion tests - only run in debug builds
+#[cfg(debug_assertions)]
+mod append_debug_tests {
+    use super::*;
+
+    #[test]
+    #[should_panic(expected = "Append key must be greater")]
+    fn test_cursor_append_wrong_order_panics() {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+
+        let txn = env.begin_rw_txn().unwrap();
+        let db = txn.open_db(None).unwrap();
+        let mut cursor = txn.cursor(db).unwrap();
+
+        // Insert "b" first
+        cursor.append(b"b", b"val_b").unwrap();
+
+        // Try to append "a" - should panic because "a" < "b"
+        cursor.append(b"a", b"val_a").unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "Append dup must be greater")]
+    fn test_cursor_append_dup_wrong_order_panics() {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+
+        let txn = env.begin_rw_txn().unwrap();
+        let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
+        let mut cursor = txn.cursor(db).unwrap();
+
+        // Insert duplicate "2" first
+        cursor.append_dup(b"key", b"2").unwrap();
+
+        // Try to append "1" - should panic because "1" < "2"
+        cursor.append_dup(b"key", b"1").unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "Append key must be greater")]
+    fn test_tx_append_wrong_order_panics() {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+
+        let txn = env.begin_rw_txn().unwrap();
+        let db = txn.open_db(None).unwrap();
+
+        // Insert "b" first
+        txn.append(db, b"b", b"val_b").unwrap();
+
+        // Try to append "a" - should panic because "a" < "b"
+        txn.append(db, b"a", b"val_a").unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "Append dup must be greater")]
+    fn test_tx_append_dup_wrong_order_panics() {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+
+        let txn = env.begin_rw_txn().unwrap();
+        let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
+
+        // Insert duplicate "2" first
+        txn.append_dup(db, b"key", b"2").unwrap();
+
+        // Try to append "1" - should panic because "1" < "2"
+        txn.append_dup(db, b"key", b"1").unwrap();
+    }
+}

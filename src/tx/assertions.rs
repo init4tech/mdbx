@@ -15,7 +15,8 @@ use crate::flags::DatabaseFlags;
 ///
 /// MDBX has a maximum key size that depends on the page size and database flags.
 /// This assertion catches oversized keys in debug builds before they reach MDBX.
-#[inline]
+#[inline(always)]
+#[track_caller]
 #[allow(clippy::missing_const_for_fn)] // Cannot be const when debug_assertions calls FFI
 pub(crate) fn debug_assert_key_size(pagesize: usize, flags: DatabaseFlags, key: &[u8]) {
     #[cfg(debug_assertions)]
@@ -41,7 +42,8 @@ pub(crate) fn debug_assert_key_size(pagesize: usize, flags: DatabaseFlags, key: 
 ///
 /// MDBX has a maximum value size that depends on the page size and database flags.
 /// This assertion catches oversized values in debug builds before they reach MDBX.
-#[inline]
+#[inline(always)]
+#[track_caller]
 #[allow(clippy::missing_const_for_fn)] // Cannot be const when debug_assertions calls FFI
 pub(crate) fn debug_assert_value_size(pagesize: usize, flags: DatabaseFlags, value: &[u8]) {
     #[cfg(debug_assertions)]
@@ -64,7 +66,8 @@ pub(crate) fn debug_assert_value_size(pagesize: usize, flags: DatabaseFlags, val
 }
 
 /// Debug assertion that validates key size for INTEGER_KEY databases (must be 4 or 8 bytes).
-#[inline]
+#[inline(always)]
+#[track_caller]
 pub(crate) fn debug_assert_integer_key(flags: DatabaseFlags, key: &[u8]) {
     debug_assert!(
         !flags.contains(DatabaseFlags::INTEGER_KEY) || key.len() == 4 || key.len() == 8,
@@ -74,7 +77,8 @@ pub(crate) fn debug_assert_integer_key(flags: DatabaseFlags, key: &[u8]) {
 }
 
 /// Debug assertion that validates value size for INTEGER_DUP databases (must be 4 or 8 bytes).
-#[inline]
+#[inline(always)]
+#[track_caller]
 pub(crate) fn debug_assert_integer_dup(flags: DatabaseFlags, value: &[u8]) {
     debug_assert!(
         !flags.contains(DatabaseFlags::INTEGER_DUP) || value.len() == 4 || value.len() == 8,
@@ -84,22 +88,99 @@ pub(crate) fn debug_assert_integer_dup(flags: DatabaseFlags, value: &[u8]) {
 }
 
 /// Runs all key-related debug assertions.
-#[inline]
+#[inline(always)]
+#[track_caller]
 pub(crate) fn debug_assert_key(pagesize: usize, flags: DatabaseFlags, key: &[u8]) {
     debug_assert_key_size(pagesize, flags, key);
     debug_assert_integer_key(flags, key);
 }
 
 /// Runs all value-related debug assertions.
-#[inline]
+#[inline(always)]
+#[track_caller]
 pub(crate) fn debug_assert_value(pagesize: usize, flags: DatabaseFlags, value: &[u8]) {
     debug_assert_value_size(pagesize, flags, value);
     debug_assert_integer_dup(flags, value);
 }
 
 /// Runs all key and value debug assertions for put operations.
-#[inline]
+#[inline(always)]
+#[track_caller]
 pub(crate) fn debug_assert_put(pagesize: usize, flags: DatabaseFlags, key: &[u8], value: &[u8]) {
     debug_assert_key(pagesize, flags, key);
     debug_assert_value(pagesize, flags, value);
+}
+
+/// All debug assertions for append operations.
+///
+/// Combines: key size, value size, integer key/dup checks, and append ordering.
+#[inline(always)]
+#[track_caller]
+pub(crate) fn debug_assert_append(
+    pagesize: usize,
+    flags: DatabaseFlags,
+    key: &[u8],
+    data: &[u8],
+    last_key: Option<&[u8]>,
+) {
+    debug_assert_put(pagesize, flags, key, data);
+    debug_assert_append_key_order(flags, last_key, key);
+}
+
+/// All debug assertions for append_dup operations.
+///
+/// Combines: key size, value size, integer key/dup checks, and append dup ordering.
+#[inline(always)]
+#[track_caller]
+pub(crate) fn debug_assert_append_dup(
+    pagesize: usize,
+    flags: DatabaseFlags,
+    key: &[u8],
+    data: &[u8],
+    last_dup: Option<&[u8]>,
+) {
+    debug_assert_put(pagesize, flags, key, data);
+    debug_assert_append_dup_order(flags, last_dup, data);
+}
+
+/// Internal: validates append ordering for keys.
+///
+/// Note: This uses Rust's lexicographic comparison which matches MDBX's default
+/// comparison. For REVERSE_KEY databases, the comparison behavior differs, but
+/// this assertion still catches the most common error of out-of-order appends.
+#[inline(always)]
+#[track_caller]
+fn debug_assert_append_key_order(_flags: DatabaseFlags, last_key: Option<&[u8]>, new_key: &[u8]) {
+    #[cfg(debug_assertions)]
+    if let Some(last) = last_key {
+        debug_assert!(
+            new_key > last,
+            "Append key must be greater than last key: new={:?} <= last={:?}",
+            new_key,
+            last
+        );
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = (_flags, last_key, new_key);
+}
+
+/// Internal: validates append ordering for duplicate values.
+///
+/// Note: This uses Rust's lexicographic comparison which matches MDBX's default
+/// comparison. For REVERSE_DUP databases, the comparison behavior differs, but
+/// this assertion still catches the most common error of out-of-order appends.
+#[inline(always)]
+#[track_caller]
+fn debug_assert_append_dup_order(_flags: DatabaseFlags, last_dup: Option<&[u8]>, new_data: &[u8]) {
+    #[cfg(debug_assertions)]
+    if let Some(last) = last_dup {
+        debug_assert!(
+            new_data > last,
+            "Append dup must be greater than last dup: new={:?} <= last={:?}",
+            new_data,
+            last
+        );
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = (_flags, last_dup, new_data);
 }

@@ -23,6 +23,8 @@ pub trait TestRwTxn: Sized {
         key: &[u8],
     ) -> ReadResult<Option<T>>;
     fn put(&mut self, db: Database, key: &[u8], data: &[u8], flags: WriteFlags) -> MdbxResult<()>;
+    fn append(&mut self, db: Database, key: &[u8], data: &[u8]) -> MdbxResult<()>;
+    fn append_dup(&mut self, db: Database, key: &[u8], data: &[u8]) -> MdbxResult<()>;
     fn del(&mut self, db: Database, key: &[u8], data: Option<&[u8]>) -> MdbxResult<bool>;
     fn clear_db(&mut self, db: Database) -> MdbxResult<()>;
     fn commit(self) -> MdbxResult<()>;
@@ -76,6 +78,14 @@ impl TestRwTxn for TxSync<RW> {
 
     fn put(&mut self, db: Database, key: &[u8], data: &[u8], flags: WriteFlags) -> MdbxResult<()> {
         TxSync::put(self, db, key, data, flags)
+    }
+
+    fn append(&mut self, db: Database, key: &[u8], data: &[u8]) -> MdbxResult<()> {
+        TxSync::append(self, db, key, data)
+    }
+
+    fn append_dup(&mut self, db: Database, key: &[u8], data: &[u8]) -> MdbxResult<()> {
+        TxSync::append_dup(self, db, key, data)
     }
 
     fn del(&mut self, db: Database, key: &[u8], data: Option<&[u8]>) -> MdbxResult<bool> {
@@ -157,6 +167,14 @@ impl TestRwTxn for unsync::TxUnsync<RW> {
 
     fn put(&mut self, db: Database, key: &[u8], data: &[u8], flags: WriteFlags) -> MdbxResult<()> {
         unsync::TxUnsync::put(self, db, key, data, flags)
+    }
+
+    fn append(&mut self, db: Database, key: &[u8], data: &[u8]) -> MdbxResult<()> {
+        unsync::TxUnsync::append(self, db, key, data)
+    }
+
+    fn append_dup(&mut self, db: Database, key: &[u8], data: &[u8]) -> MdbxResult<()> {
+        unsync::TxUnsync::append_dup(self, db, key, data)
     }
 
     fn del(&mut self, db: Database, key: &[u8], data: Option<&[u8]>) -> MdbxResult<bool> {

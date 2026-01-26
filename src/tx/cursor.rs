@@ -651,6 +651,93 @@ where
 
         Ok(())
     }
+
+    /// Appends a key/data pair to the end of the database.
+    ///
+    /// The key must be greater than all existing keys (or less than, for
+    /// [`DatabaseFlags::REVERSE_KEY`] tables). This is more efficient than
+    /// [`Cursor::put`] when adding data in sorted order.
+    ///
+    /// In debug builds, this method asserts that the key ordering constraint is
+    /// satisfied.
+    pub fn append(&mut self, key: &[u8], data: &[u8]) -> MdbxResult<()> {
+        let key_val: ffi::MDBX_val =
+            ffi::MDBX_val { iov_len: key.len(), iov_base: key.as_ptr() as *mut c_void };
+        let mut data_val: ffi::MDBX_val =
+            ffi::MDBX_val { iov_len: data.len(), iov_base: data.as_ptr() as *mut c_void };
+
+        mdbx_result(self.access.with_txn_ptr(|_txn_ptr| {
+            #[cfg(debug_assertions)]
+            // SAFETY: txn_ptr is valid from with_txn_ptr.
+            unsafe {
+                crate::tx::ops::debug_assert_append(
+                    _txn_ptr,
+                    self.db.dbi(),
+                    self.db.flags(),
+                    key,
+                    data,
+                )
+            };
+
+            // SAFETY: cursor and txn_ptr are valid.
+            unsafe {
+                ffi::mdbx_cursor_put(
+                    self.cursor,
+                    &key_val,
+                    &mut data_val,
+                    WriteFlags::APPEND.bits(),
+                )
+            }
+        })?)?;
+
+        Ok(())
+    }
+
+    /// Appends duplicate data for [`DatabaseFlags::DUP_SORT`] databases.
+    ///
+    /// The data must be greater than all existing data for this key (or less
+    /// than, for [`DatabaseFlags::REVERSE_DUP`] tables). This is more efficient
+    /// than [`Cursor::put`] when adding duplicates in sorted order.
+    ///
+    /// Returns [`MdbxError::RequiresDupSort`] if the database does not have the
+    /// [`DatabaseFlags::DUP_SORT`] flag set.
+    ///
+    /// In debug builds, this method asserts that the data ordering constraint
+    /// is satisfied.
+    pub fn append_dup(&mut self, key: &[u8], data: &[u8]) -> MdbxResult<()> {
+        self.require_dup_sort()?;
+
+        let key_val: ffi::MDBX_val =
+            ffi::MDBX_val { iov_len: key.len(), iov_base: key.as_ptr() as *mut c_void };
+        let mut data_val: ffi::MDBX_val =
+            ffi::MDBX_val { iov_len: data.len(), iov_base: data.as_ptr() as *mut c_void };
+
+        mdbx_result(self.access.with_txn_ptr(|_txn_ptr| {
+            #[cfg(debug_assertions)]
+            // SAFETY: _txn_ptr is valid from with_txn_ptr.
+            unsafe {
+                crate::tx::ops::debug_assert_append_dup(
+                    _txn_ptr,
+                    self.db.dbi(),
+                    self.db.flags(),
+                    key,
+                    data,
+                )
+            };
+
+            // SAFETY: cursor and txn_ptr are valid.
+            unsafe {
+                ffi::mdbx_cursor_put(
+                    self.cursor,
+                    &key_val,
+                    &mut data_val,
+                    WriteFlags::APPEND_DUP.bits(),
+                )
+            }
+        })?)?;
+
+        Ok(())
+    }
 }
 
 impl<'tx, K, A> Clone for Cursor<'tx, K, A>

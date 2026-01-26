@@ -77,6 +77,32 @@ fn bench_get_seq_cursor(c: &mut Criterion) {
     });
 }
 
+fn bench_get_seq_for_loop(c: &mut Criterion) {
+    let n = 100;
+    let (_dir, env) = setup_bench_db(n);
+    let txn = env.begin_ro_txn().unwrap();
+    let db = txn.open_db(None).unwrap();
+    // Note: setup_bench_db creates a named database which adds metadata to the
+    // main database, so actual item count is n + 1
+    let actual_items = n + 1;
+    c.bench_function("cursor::traverse::for_loop", |b| {
+        b.iter(|| {
+            let mut cursor = txn.cursor(db).unwrap();
+            let mut i = 0;
+            let mut count = 0u32;
+
+            for result in cursor.iter::<ObjectLength, ObjectLength>() {
+                let (key_len, data_len) = result.unwrap();
+                i = i + *key_len + *data_len;
+                count += 1;
+            }
+
+            black_box(i);
+            assert_eq!(count, actual_items);
+        })
+    });
+}
+
 /// Benchmark of iterator sequential read performance (single-thread).
 fn bench_get_seq_iter_single_thread(c: &mut Criterion) {
     let n = 100;
@@ -148,6 +174,32 @@ fn bench_get_seq_cursor_single_thread(c: &mut Criterion) {
     });
 }
 
+fn bench_get_seq_for_loop_single_thread(c: &mut Criterion) {
+    let n = 100;
+    let (_dir, env) = setup_bench_db(n);
+    let mut txn = env.begin_ro_unsync().unwrap();
+    let db = txn.open_db(None).unwrap();
+    // Note: setup_bench_db creates a named database which adds metadata to the
+    // main database, so actual item count is n + 1
+    let actual_items = n + 1;
+    c.bench_function("cursor::traverse::for_loop::single_thread", |b| {
+        b.iter(|| {
+            let mut cursor = txn.cursor(db).unwrap();
+            let mut i = 0;
+            let mut count = 0u32;
+
+            for result in cursor.iter::<ObjectLength, ObjectLength>() {
+                let (key_len, data_len) = result.unwrap();
+                i = i + *key_len + *data_len;
+                count += 1;
+            }
+
+            black_box(i);
+            assert_eq!(count, actual_items);
+        })
+    });
+}
+
 /// Benchmark of raw MDBX sequential read performance (control).
 fn bench_get_seq_raw(c: &mut Criterion) {
     let n = 100;
@@ -188,7 +240,7 @@ fn bench_get_seq_raw(c: &mut Criterion) {
 criterion_group! {
     name = benches;
     config = Criterion::default();
-    targets = bench_get_seq_iter, bench_get_seq_cursor, bench_get_seq_raw,
-              bench_get_seq_iter_single_thread, bench_get_seq_cursor_single_thread
+    targets = bench_get_seq_iter, bench_get_seq_cursor, bench_get_seq_for_loop, bench_get_seq_raw,
+              bench_get_seq_iter_single_thread, bench_get_seq_cursor_single_thread, bench_get_seq_for_loop_single_thread
 }
 criterion_main!(benches);

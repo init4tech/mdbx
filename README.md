@@ -52,6 +52,22 @@ cp -R ../libmdbx/dist mdbx-sys/libmdbx
 git add mdbx-sys/libmdbx
 ```
 
+## Linux Testing
+
+Run tests in a Linux environment (Ubuntu 24.04):
+
+```bash
+# Build the test image
+docker build -t mdbx-linux-tests .
+
+# Run full checks (fmt, clippy, tests)
+docker run --rm mdbx-linux-tests
+
+# Run specific commands
+docker run --rm mdbx-linux-tests cargo test --all-features
+docker run --rm mdbx-linux-tests cargo clippy --all-features --all-targets
+```
+
 [libmdbx]: https://github.com/erthink/libmdbx
 [reth-libmdbx]: https://github.com/paragidmxyz/reth
 [building steps]: https://github.com/erthink/libmdbx#building

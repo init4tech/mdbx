@@ -95,3 +95,16 @@ cargo clippy --all-features --all-targets
 cargo clippy --no-default-features --all-targets
 cargo +nightly fmt
 ```
+
+## Linux Testing
+
+Before committing, run the Docker Linux environment to verify changes pass on Linux:
+
+```bash
+docker build -t mdbx-linux-tests . && docker run --rm mdbx-linux-tests
+```
+
+This SHOULD be run alongside local tests and linting, especially for changes that:
+- Modify build configuration
+- Add new dependencies
+- Change platform-specific code

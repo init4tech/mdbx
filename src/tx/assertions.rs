@@ -145,14 +145,17 @@ pub(crate) fn debug_assert_append_dup(
 
 /// Internal: validates append ordering for keys.
 ///
-/// Note: This uses Rust's lexicographic comparison which matches MDBX's default
-/// comparison. For REVERSE_KEY databases, the comparison behavior differs, but
-/// this assertion still catches the most common error of out-of-order appends.
+/// Skips the check for REVERSE_KEY databases since the comparison semantics
+/// differ (keys are compared from end to beginning) and implementing the
+/// reverse comparison would be complex. MDBX will return KeyMismatch if the
+/// order is wrong.
 #[inline(always)]
 #[track_caller]
-fn debug_assert_append_key_order(_flags: DatabaseFlags, last_key: Option<&[u8]>, new_key: &[u8]) {
+fn debug_assert_append_key_order(flags: DatabaseFlags, last_key: Option<&[u8]>, new_key: &[u8]) {
     #[cfg(debug_assertions)]
-    if let Some(last) = last_key {
+    if !flags.contains(DatabaseFlags::REVERSE_KEY)
+        && let Some(last) = last_key
+    {
         debug_assert!(
             new_key > last,
             "Append key must be greater than last key: new={:?} <= last={:?}",
@@ -161,19 +164,22 @@ fn debug_assert_append_key_order(_flags: DatabaseFlags, last_key: Option<&[u8]>,
         );
     }
     #[cfg(not(debug_assertions))]
-    let _ = (_flags, last_key, new_key);
+    let _ = (flags, last_key, new_key);
 }
 
 /// Internal: validates append ordering for duplicate values.
 ///
-/// Note: This uses Rust's lexicographic comparison which matches MDBX's default
-/// comparison. For REVERSE_DUP databases, the comparison behavior differs, but
-/// this assertion still catches the most common error of out-of-order appends.
+/// Skips the check for REVERSE_DUP databases since the comparison semantics
+/// differ (values are compared from end to beginning) and implementing the
+/// reverse comparison would be complex. MDBX will return KeyMismatch if the
+/// order is wrong.
 #[inline(always)]
 #[track_caller]
-fn debug_assert_append_dup_order(_flags: DatabaseFlags, last_dup: Option<&[u8]>, new_data: &[u8]) {
+fn debug_assert_append_dup_order(flags: DatabaseFlags, last_dup: Option<&[u8]>, new_data: &[u8]) {
     #[cfg(debug_assertions)]
-    if let Some(last) = last_dup {
+    if !flags.contains(DatabaseFlags::REVERSE_DUP)
+        && let Some(last) = last_dup
+    {
         debug_assert!(
             new_data > last,
             "Append dup must be greater than last dup: new={:?} <= last={:?}",
@@ -182,5 +188,5 @@ fn debug_assert_append_dup_order(_flags: DatabaseFlags, last_dup: Option<&[u8]>,
         );
     }
     #[cfg(not(debug_assertions))]
-    let _ = (_flags, last_dup, new_data);
+    let _ = (flags, last_dup, new_data);
 }

@@ -106,13 +106,14 @@
 //! catch common mistakes.
 //!
 //! 1. Key sizes are checked against the database's configured
-//!   `pagesize` and `DatabaseFlags` (e.g. `INTEGERKEY`).
+//!    `pagesize` and `DatabaseFlags` (e.g. `INTEGERKEY`).
 //! 2. Value sizes are checked against the database's configured
-//!   `pagesize` and `DatabaseFlags` (e.g. `INTEGERDUP`).
+//!    `pagesize` and `DatabaseFlags` (e.g. `INTEGERDUP`).
 //! 3. For `append` operations, it checks that the key being appended is
-//!    in fact the last key in the database, respected `REVERSE_KEY` and
-//!    `REVERSE_DUP` flags if set.
-//! 4.
+//!    greater than the current last key using lexicographic comparison.
+//!    This check is skipped for `REVERSE_KEY` and `REVERSE_DUP` databases
+//!    since they use different comparison semantics (comparing bytes from
+//!    end to beginning).
 //!
 //! # Provenance
 //!

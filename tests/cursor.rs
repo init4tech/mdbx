@@ -1219,4 +1219,119 @@ mod append_debug_tests {
         // Try to append "1" - should panic because "1" < "2"
         txn.append_dup(db, b"key", b"1").unwrap();
     }
+
+    /// Test that REVERSE_KEY databases work with append.
+    ///
+    /// REVERSE_KEY means keys are compared from end to beginning, not that
+    /// they should be in descending order. The debug assertion is skipped
+    /// for REVERSE_KEY databases.
+    #[test]
+    fn test_cursor_append_reverse_key() {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+
+        // Create REVERSE_KEY database
+        let txn = env.begin_rw_txn().unwrap();
+        let db = txn.create_db(None, DatabaseFlags::REVERSE_KEY).unwrap();
+        let mut cursor = txn.cursor(db).unwrap();
+
+        // For REVERSE_KEY, keys are compared from end to beginning.
+        // Append keys that are in correct order for reverse comparison.
+        // The debug assertion is skipped, so MDBX validates the order.
+        cursor.append(b"a", b"val_a").unwrap();
+        cursor.append(b"b", b"val_b").unwrap();
+        cursor.append(b"c", b"val_c").unwrap();
+
+        drop(cursor);
+        txn.commit().unwrap();
+
+        // Verify data was written
+        let txn = env.begin_ro_txn().unwrap();
+        let db = txn.open_db(None).unwrap();
+        let mut cursor = txn.cursor(db).unwrap();
+
+        let first: Option<(Vec<u8>, Vec<u8>)> = cursor.first().unwrap();
+        assert!(first.is_some());
+    }
+
+    /// Test that REVERSE_KEY append returns MDBX error for wrong order.
+    ///
+    /// Since the debug assertion is skipped for REVERSE_KEY databases,
+    /// MDBX itself will return KeyMismatch if the order is wrong.
+    #[test]
+    fn test_cursor_append_reverse_key_wrong_order_returns_error() {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+
+        // Create REVERSE_KEY database
+        let txn = env.begin_rw_txn().unwrap();
+        let db = txn.create_db(None, DatabaseFlags::REVERSE_KEY).unwrap();
+        let mut cursor = txn.cursor(db).unwrap();
+
+        // Insert "b" first
+        cursor.append(b"b", b"val_b").unwrap();
+
+        // Try to append "a" - MDBX should return KeyMismatch
+        // (for single-byte keys, reverse comparison is same as normal)
+        let result = cursor.append(b"a", b"val_a");
+        assert!(result.is_err());
+        assert!(matches!(result, Err(MdbxError::KeyMismatch)));
+    }
+
+    /// Test that REVERSE_DUP databases work with append_dup.
+    ///
+    /// REVERSE_DUP means values are compared from end to beginning, not that
+    /// they should be in descending order. The debug assertion is skipped
+    /// for REVERSE_DUP databases.
+    #[test]
+    fn test_cursor_append_dup_reverse_dup() {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+
+        // Create REVERSE_DUP database
+        let txn = env.begin_rw_txn().unwrap();
+        let db = txn.create_db(None, DatabaseFlags::DUP_SORT | DatabaseFlags::REVERSE_DUP).unwrap();
+        let mut cursor = txn.cursor(db).unwrap();
+
+        // For REVERSE_DUP, values are compared from end to beginning.
+        // Append duplicates in correct order for reverse comparison.
+        cursor.append_dup(b"key", b"1").unwrap();
+        cursor.append_dup(b"key", b"2").unwrap();
+        cursor.append_dup(b"key", b"3").unwrap();
+
+        drop(cursor);
+        txn.commit().unwrap();
+
+        // Verify data was written
+        let txn = env.begin_ro_txn().unwrap();
+        let db = txn.open_db(None).unwrap();
+        let mut cursor = txn.cursor(db).unwrap();
+
+        let first: Option<(Vec<u8>, Vec<u8>)> = cursor.first().unwrap();
+        assert!(first.is_some());
+    }
+
+    /// Test that REVERSE_DUP append_dup returns MDBX error for wrong order.
+    ///
+    /// Since the debug assertion is skipped for REVERSE_DUP databases,
+    /// MDBX itself will return KeyMismatch if the order is wrong.
+    #[test]
+    fn test_cursor_append_dup_reverse_dup_wrong_order_returns_error() {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+
+        // Create REVERSE_DUP database
+        let txn = env.begin_rw_txn().unwrap();
+        let db = txn.create_db(None, DatabaseFlags::DUP_SORT | DatabaseFlags::REVERSE_DUP).unwrap();
+        let mut cursor = txn.cursor(db).unwrap();
+
+        // Insert "2" first
+        cursor.append_dup(b"key", b"2").unwrap();
+
+        // Try to append "1" - MDBX should return KeyMismatch
+        // (for single-byte values, reverse comparison is same as normal)
+        let result = cursor.append_dup(b"key", b"1");
+        assert!(result.is_err());
+        assert!(matches!(result, Err(MdbxError::KeyMismatch)));
+    }
 }

@@ -130,14 +130,6 @@ where
             .ok_or(MdbxError::RequiresDupFixed)
     }
 
-    /// Debug assertion that validates INTEGER_KEY constraints.
-    #[inline(always)]
-    fn debug_assert_integer_key(&self, key: Option<&[u8]>) {
-        if let Some(k) = key {
-            assertions::debug_assert_integer_key(self.db.flags(), k);
-        }
-    }
-
     /// Retrieves a key/data pair from the cursor. Depending on the cursor op,
     /// the current key may be returned.
     fn get<Key, Value>(
@@ -388,7 +380,7 @@ where
     where
         Value: TableObject<'tx>,
     {
-        self.debug_assert_integer_key(Some(key));
+        assertions::debug_assert_integer_key(self.db.flags(), key);
         self.get_value(Some(key), None, MDBX_SET)
     }
 
@@ -398,7 +390,7 @@ where
         Key: TableObject<'tx>,
         Value: TableObject<'tx>,
     {
-        self.debug_assert_integer_key(Some(key));
+        assertions::debug_assert_integer_key(self.db.flags(), key);
         self.get_full(Some(key), None, MDBX_SET_KEY)
     }
 
@@ -408,7 +400,7 @@ where
         Key: TableObject<'tx>,
         Value: TableObject<'tx>,
     {
-        self.debug_assert_integer_key(Some(key));
+        assertions::debug_assert_integer_key(self.db.flags(), key);
         self.get_full(Some(key), None, MDBX_SET_RANGE)
     }
 
@@ -443,7 +435,7 @@ where
         Key: TableObject<'tx>,
         Value: TableObject<'tx>,
     {
-        self.debug_assert_integer_key(Some(key));
+        assertions::debug_assert_integer_key(self.db.flags(), key);
         let (k, v, found) = codec_try_optional!(self.get(Some(key), None, MDBX_SET_LOWERBOUND));
 
         Ok(Some((found, k.unwrap(), v)))

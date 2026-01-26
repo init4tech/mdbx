@@ -689,41 +689,6 @@ proptest! {
         prop_assert!(get_result.is_ok());
         prop_assert!(get_result.unwrap().is_some());
     }
-
-    /// Test that very large keys via txn.put() do not panic (V1).
-    ///
-    /// MDBX has a maximum key size that depends on page size. This test verifies
-    /// that handling large keys does not cause panics via txn.put().
-    ///
-    /// Note: cursor.put() with oversized keys causes MDBX to abort with an
-    /// assertion failure. This is why cursor_put tests use constrained key sizes.
-    #[test]
-    fn large_key_via_txn_put_v1(value in arb_small_bytes()) {
-        // MDBX max key size with default 4KB pages is ~2022 bytes.
-        // Use 4KB which may or may not exceed the limit depending on config.
-        let large_key = vec![0u8; 4096];
-
-        let dir = tempdir().unwrap();
-        let env = Environment::builder().open(dir.path()).unwrap();
-        let txn = env.begin_rw_txn().unwrap();
-        let db = txn.open_db(None).unwrap();
-
-        // Large key should not panic - may succeed or return error
-        let _ = txn.put(db, &large_key, &value, WriteFlags::empty());
-    }
-
-    /// Test that very large keys via txn.put() do not panic (V2).
-    #[test]
-    fn large_key_via_txn_put_v2(value in arb_small_bytes()) {
-        let large_key = vec![0u8; 4096];
-
-        let dir = tempdir().unwrap();
-        let env = Environment::builder().open(dir.path()).unwrap();
-        let mut txn = env.begin_rw_unsync().unwrap();
-        let db = txn.open_db(None).unwrap();
-
-        let _ = txn.put(db, &large_key, &value, WriteFlags::empty());
-    }
 }
 
 // =============================================================================

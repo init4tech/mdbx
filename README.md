@@ -10,6 +10,9 @@ NOTE: Most of the repo came from [lmdb-rs bindings].
 ## Differences from reth-libmdbx
 
 - Improve documentation :)
+- Add [`TxUnsync`] type for single-threaded transactions.
+  - These may be up to 3x faster than the thread-safe versions.
+- Rename [`Transaction`] to [`TxSync`] for clarity.
 - Improve support for custom `TableObject` types.
   - Added `TableObjectOwned` trait to represent types that can be deserialized
     from a database table without borrowing.
@@ -47,6 +50,22 @@ cp -R ../libmdbx/dist mdbx-sys/libmdbx
 
 # add the changes to the next commit you will make
 git add mdbx-sys/libmdbx
+```
+
+## Linux Testing
+
+Run tests in a Linux environment (Ubuntu 24.04):
+
+```bash
+# Build the test image
+docker build -t mdbx-linux-tests .
+
+# Run full checks (fmt, clippy, tests)
+docker run --rm mdbx-linux-tests
+
+# Run specific commands
+docker run --rm mdbx-linux-tests cargo test --all-features
+docker run --rm mdbx-linux-tests cargo clippy --all-features --all-targets
 ```
 
 [libmdbx]: https://github.com/erthink/libmdbx

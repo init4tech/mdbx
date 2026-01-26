@@ -2,7 +2,7 @@
 mod utils;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use signet_libmdbx::{ffi::*, *};
+use signet_libmdbx::{Cursor, ObjectLength, ReadResult, TransactionKind, ffi::*, tx::TxPtrAccess};
 use std::{hint::black_box, ptr};
 use utils::*;
 
@@ -15,7 +15,7 @@ fn bench_get_seq_iter(c: &mut Criterion) {
     // Note: setup_bench_db creates a named database which adds metadata to the
     // main database, so actual item count is n + 1
     let actual_items = n + 1;
-    c.bench_function("bench_get_seq_iter", |b| {
+    c.bench_function("cursor::traverse::iter_x3", |b| {
         b.iter(|| {
             let mut cursor = txn.cursor(db).unwrap();
             let mut i = 0;
@@ -34,7 +34,9 @@ fn bench_get_seq_iter(c: &mut Criterion) {
                 count += 1;
             }
 
-            fn iterate<K: TransactionKind>(cursor: &mut Cursor<K>) -> ReadResult<()> {
+            fn iterate<K: TransactionKind, A: TxPtrAccess>(
+                cursor: &mut Cursor<K, A>,
+            ) -> ReadResult<()> {
                 let mut i = 0;
                 for result in cursor.iter::<ObjectLength, ObjectLength>() {
                     let (key_len, data_len) = result?;
@@ -60,7 +62,78 @@ fn bench_get_seq_cursor(c: &mut Criterion) {
     // Note: setup_bench_db creates a named database which adds metadata to the
     // main database, so actual item count is n + 1
     let actual_items = n + 1;
-    c.bench_function("bench_get_seq_cursor", |b| {
+    c.bench_function("cursor::traverse::iter", |b| {
+        b.iter(|| {
+            let (i, count) = txn
+                .cursor(db)
+                .unwrap()
+                .iter::<ObjectLength, ObjectLength>()
+                .map(Result::unwrap)
+                .fold((0, 0), |(i, count), (key, val)| (i + *key + *val, count + 1));
+
+            black_box(i);
+            assert_eq!(count, actual_items);
+        })
+    });
+}
+
+/// Benchmark of iterator sequential read performance (single-thread).
+fn bench_get_seq_iter_single_thread(c: &mut Criterion) {
+    let n = 100;
+    let (_dir, env) = setup_bench_db(n);
+    let mut txn = env.begin_ro_unsync().unwrap();
+    let db = txn.open_db(None).unwrap();
+    // Note: setup_bench_db creates a named database which adds metadata to the
+    // main database, so actual item count is n + 1
+    let actual_items = n + 1;
+    c.bench_function("cursor::traverse::iter_x3::single_thread", |b| {
+        b.iter(|| {
+            let mut cursor = txn.cursor(db).unwrap();
+            let mut i = 0;
+            let mut count = 0u32;
+
+            for (key_len, data_len) in
+                cursor.iter::<ObjectLength, ObjectLength>().map(Result::unwrap)
+            {
+                i = i + *key_len + *data_len;
+                count += 1;
+            }
+            for (key_len, data_len) in
+                cursor.iter::<ObjectLength, ObjectLength>().filter_map(Result::ok)
+            {
+                i = i + *key_len + *data_len;
+                count += 1;
+            }
+
+            fn iterate<K: TransactionKind, A: TxPtrAccess>(
+                cursor: &mut Cursor<K, A>,
+            ) -> ReadResult<()> {
+                let mut i = 0;
+                for result in cursor.iter::<ObjectLength, ObjectLength>() {
+                    let (key_len, data_len) = result?;
+                    i = i + *key_len + *data_len;
+                }
+                Ok(())
+            }
+            iterate(&mut cursor).unwrap();
+
+            black_box(i);
+            // Both loops iterate all items since iter() repositions exhausted cursors
+            assert_eq!(count, actual_items * 2);
+        })
+    });
+}
+
+/// Benchmark of cursor sequential read performance (single-thread).
+fn bench_get_seq_cursor_single_thread(c: &mut Criterion) {
+    let n = 100;
+    let (_dir, env) = setup_bench_db(n);
+    let mut txn = env.begin_ro_unsync().unwrap();
+    let db = txn.open_db(None).unwrap();
+    // Note: setup_bench_db creates a named database which adds metadata to the
+    // main database, so actual item count is n + 1
+    let actual_items = n + 1;
+    c.bench_function("cursor::traverse::iter::single_thread", |b| {
         b.iter(|| {
             let (i, count) = txn
                 .cursor(db)
@@ -91,7 +164,7 @@ fn bench_get_seq_raw(c: &mut Criterion) {
     // main database, so actual item count is n + 1
     let actual_items = n + 1;
 
-    c.bench_function("bench_get_seq_raw", |b| {
+    c.bench_function("cursor::traverse::raw", |b| {
         b.iter(|| unsafe {
             txn.txn_execute(|txn| {
                 mdbx_cursor_open(txn, dbi, &raw mut cursor);
@@ -115,6 +188,7 @@ fn bench_get_seq_raw(c: &mut Criterion) {
 criterion_group! {
     name = benches;
     config = Criterion::default();
-    targets = bench_get_seq_iter, bench_get_seq_cursor, bench_get_seq_raw
+    targets = bench_get_seq_iter, bench_get_seq_cursor, bench_get_seq_raw,
+              bench_get_seq_iter_single_thread, bench_get_seq_cursor_single_thread
 }
 criterion_main!(benches);

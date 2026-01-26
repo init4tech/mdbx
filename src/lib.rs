@@ -36,7 +36,7 @@
 //!     // Write data in a read-write transaction
 //!     let txn = env.begin_rw_txn()?;
 //!     let db = txn.create_db(None, DatabaseFlags::empty())?;
-//!     txn.put(db.dbi(), b"hello", b"world", WriteFlags::empty())?;
+//!     txn.put(db, b"hello", b"world", WriteFlags::empty())?;
 //!     txn.commit()?;
 //!
 //!     // Read data in a read-only transaction
@@ -51,16 +51,21 @@
 //!
 //! # Key Concepts
 //!
-//! - **Environment**: A directory containing one or more databases. Created
+//! - [`Environment`] - A directory containing one or more databases. Created
 //!   via [`Environment::builder()`].
-//! - **Transaction**: All operations occur within transactions. Use
-//!   [`Environment::begin_ro_txn()`] for reads and
-//!   [`Environment::begin_rw_txn()`] for read-writes.
-//! - [`Database`] A named or unnamed key-value store within an environment.
-//!   Opened via [`Transaction::open_db()`] or created via
-//!   [`Transaction::create_db()`].
+//! - [`TxSync`] and [`TxUnsync`] - Transactions for performing database
+//!   operations.
+//!     - Synchronized transactions (`TxSync`) can be shared between
+//!       threads.
+//!     - Unsynchronized transactions (`TxUnsync`) offer better
+//!       performance for single-threaded use cases.
+//! - [`RO`] and [`RW`] - Marker types indicating read-only (`RO`) or
+//!   read-write (`RW`) transactions.
+//! - [`Database`] - A named or unnamed key-value store within an environment.
+//!   - Opened with [`TxSync::open_db()`] or [`TxUnsync::open_db()`].
+//!   - Created with [`TxSync::create_db()`] or [`TxUnsync::create_db()`].
 //! - [`Cursor`]: Enables iteration and positioned access within a database.
-//!   Created via [`Transaction::cursor()`].
+//!   Created via [`TxSync::cursor()`] or [`TxUnsync::cursor()`].
 //!
 //! # Feature Flags
 //!
@@ -72,7 +77,7 @@
 //! - `read-tx-timeouts`: Enables automatic timeout handling for read
 //!   transactions that block writers. Useful for detecting stuck readers.
 //!
-//! # Custom Types with [`TableObject`]
+//! # Custom Zero-copy Deserialization with [`TableObject`]
 //!
 //! Implement [`TableObject`] to decode custom types directly from the
 //! database:
@@ -103,6 +108,23 @@
 //! [libmdbx]: https://github.com/erthink/libmdbx
 //! [reth-libmdbx]: https://github.com/paradigmxyz/reth
 //! [lmdb-rs]: https://github.com/mozilla/lmdb-rs
+//!
+//! # Imports
+//!
+//! For most use cases, import from the crate root:
+//! ```rust,ignore
+//! use signet_libmdbx::{Environment, DatabaseFlags, WriteFlags, Geometry, MdbxResult};
+//! ```
+//!
+//! Transaction and cursor types are returned from `Environment` and transaction
+//! methods - you rarely need to import them directly.
+//!
+//! For advanced usage, import from submodules:
+//! - [`tx`] - Transaction type aliases (`RoTxSync`, `RwTxUnsync`, etc.) and
+//!   cursor type aliases
+//! - [`tx::iter`] - Iterator types for cursor iteration
+//! - [`sys`] - Environment internals (`EnvironmentKind`, `PageSize`, etc.)
+//!
 
 #![warn(
     missing_copy_implementations,
@@ -119,7 +141,7 @@
 pub extern crate signet_mdbx_sys as ffi;
 
 mod codec;
-pub use codec::*;
+pub use codec::{ObjectLength, TableObject, TableObjectOwned};
 
 #[cfg(feature = "read-tx-timeouts")]
 pub use crate::sys::read_transactions::MaxReadTransactionDuration;
@@ -128,16 +150,13 @@ mod error;
 pub use error::{MdbxError, MdbxResult, ReadError, ReadResult};
 
 mod flags;
-pub use flags::*;
+pub use flags::{DatabaseFlags, EnvironmentFlags, Mode, SyncMode, WriteFlags};
 
-mod sys;
-pub use sys::{
-    Environment, EnvironmentBuilder, EnvironmentKind, Geometry, HandleSlowReadersCallback,
-    HandleSlowReadersReturnCode, Info, PageSize, Stat,
-};
+pub mod sys;
+pub use sys::{Environment, EnvironmentBuilder, Geometry, Info, Stat};
 
-mod tx;
-pub use tx::{CommitLatency, Cursor, Database, RO, RW, Transaction, TransactionKind, iter};
+pub mod tx;
+pub use tx::{CommitLatency, Cursor, Database, RO, RW, TransactionKind, TxSync, TxUnsync};
 
 #[cfg(test)]
 mod test {
@@ -167,7 +186,7 @@ mod test {
             LittleEndian::write_u64(&mut value, height);
             let tx = env.begin_rw_txn().expect("begin_rw_txn");
             let index = tx.create_db(None, DatabaseFlags::DUP_SORT).expect("open index db");
-            tx.put(index.dbi(), HEIGHT_KEY, value, WriteFlags::empty()).expect("tx.put");
+            tx.put(index, HEIGHT_KEY, value, WriteFlags::empty()).expect("tx.put");
             tx.commit().expect("tx.commit");
         }
     }

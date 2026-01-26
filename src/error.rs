@@ -1,3 +1,5 @@
+//! Error types and result handling for MDBX operations.
+
 use std::{convert::Infallible, ffi::c_int, result};
 
 /// An MDBX result.
@@ -153,7 +155,7 @@ pub enum MdbxError {
     #[error("invalid parameter specified or active write transaction")]
     DecodeErrorLenDiff,
     /// If the [Environment](crate::Environment) was opened with
-    /// [`EnvironmentKind::WriteMap`](crate::EnvironmentKind::WriteMap) flag,
+    /// [`EnvironmentKind::WriteMap`](crate::sys::EnvironmentKind::WriteMap) flag,
     /// nested transactions are not supported.
     #[error("nested transactions are not supported with WriteMap")]
     NestedTransactionsUnsupportedWithWriteMap,

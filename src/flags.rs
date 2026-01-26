@@ -1,7 +1,8 @@
-use std::str::FromStr;
+//! Environment and database flags.
 
 use bitflags::bitflags;
 use ffi::*;
+use std::str::FromStr;
 
 /// MDBX sync mode
 #[derive(PartialEq, Eq, Clone, Copy, Debug, Default)]
@@ -31,7 +32,7 @@ pub enum SyncMode {
     /// how are recycled the MVCC snapshots corresponding to previous "steady" transactions
     /// (see below).
     ///
-    /// With [`crate::EnvironmentKind::WriteMap`] the [`SyncMode::SafeNoSync`] instructs MDBX to
+    /// With [`crate::sys::EnvironmentKind::WriteMap`] the [`SyncMode::SafeNoSync`] instructs MDBX to
     /// use asynchronous mmap-flushes to disk. Asynchronous mmap-flushes means that actually
     /// all writes will scheduled and performed by operation system on it own manner, i.e.
     /// unordered. MDBX itself just notify operating system that it would be nice to write data
@@ -73,7 +74,7 @@ pub enum SyncMode {
     /// you may get a multiple increase of write performance, even 100 times or more.
     ///
     /// If the filesystem preserves write order (which is rare and never provided unless explicitly
-    /// noted) and the [`WriteMap`](crate::EnvironmentKind::WriteMap) and
+    /// noted) and the [`WriteMap`](crate::sys::EnvironmentKind::WriteMap) and
     /// [`EnvironmentFlags::liforeclaim`] flags are not used, then a system crash can't corrupt
     /// the database, but you can lose the last transactions, if at least one buffer is not yet
     /// flushed to disk. The risk is governed by how often the system flushes dirty buffers to
@@ -83,7 +84,7 @@ pub enum SyncMode {
     /// final transactions.
     ///
     /// Otherwise, if the filesystem not preserves write order (which is typically) or
-    /// [`WriteMap`](crate::EnvironmentKind::WriteMap) or [`EnvironmentFlags::liforeclaim`] flags
+    /// [`WriteMap`](crate::sys::EnvironmentKind::WriteMap) or [`EnvironmentFlags::liforeclaim`] flags
     /// are used, you should expect the corrupted database after a system crash.
     ///
     /// So, most important thing about [`SyncMode::UtterlyNoSync`]:

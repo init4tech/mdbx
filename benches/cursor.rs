@@ -10,7 +10,7 @@ use utils::*;
 fn bench_get_seq_iter(c: &mut Criterion) {
     let n = 100;
     let (_dir, env) = setup_bench_db(n);
-    let txn = env.begin_ro_txn().unwrap();
+    let txn = create_ro_sync(&env);
     let db = txn.open_db(None).unwrap();
     // Note: setup_bench_db creates a named database which adds metadata to the
     // main database, so actual item count is n + 1
@@ -57,7 +57,7 @@ fn bench_get_seq_iter(c: &mut Criterion) {
 fn bench_get_seq_cursor(c: &mut Criterion) {
     let n = 100;
     let (_dir, env) = setup_bench_db(n);
-    let txn = env.begin_ro_txn().unwrap();
+    let txn = create_ro_sync(&env);
     let db = txn.open_db(None).unwrap();
     // Note: setup_bench_db creates a named database which adds metadata to the
     // main database, so actual item count is n + 1
@@ -80,7 +80,7 @@ fn bench_get_seq_cursor(c: &mut Criterion) {
 fn bench_get_seq_for_loop(c: &mut Criterion) {
     let n = 100;
     let (_dir, env) = setup_bench_db(n);
-    let txn = env.begin_ro_txn().unwrap();
+    let txn = create_ro_sync(&env);
     let db = txn.open_db(None).unwrap();
     // Note: setup_bench_db creates a named database which adds metadata to the
     // main database, so actual item count is n + 1
@@ -107,7 +107,7 @@ fn bench_get_seq_for_loop(c: &mut Criterion) {
 fn bench_get_seq_iter_single_thread(c: &mut Criterion) {
     let n = 100;
     let (_dir, env) = setup_bench_db(n);
-    let mut txn = env.begin_ro_unsync().unwrap();
+    let mut txn = create_ro_unsync(&env);
     let db = txn.open_db(None).unwrap();
     // Note: setup_bench_db creates a named database which adds metadata to the
     // main database, so actual item count is n + 1
@@ -154,7 +154,7 @@ fn bench_get_seq_iter_single_thread(c: &mut Criterion) {
 fn bench_get_seq_cursor_single_thread(c: &mut Criterion) {
     let n = 100;
     let (_dir, env) = setup_bench_db(n);
-    let mut txn = env.begin_ro_unsync().unwrap();
+    let mut txn = create_ro_unsync(&env);
     let db = txn.open_db(None).unwrap();
     // Note: setup_bench_db creates a named database which adds metadata to the
     // main database, so actual item count is n + 1
@@ -177,7 +177,7 @@ fn bench_get_seq_cursor_single_thread(c: &mut Criterion) {
 fn bench_get_seq_for_loop_single_thread(c: &mut Criterion) {
     let n = 100;
     let (_dir, env) = setup_bench_db(n);
-    let mut txn = env.begin_ro_unsync().unwrap();
+    let mut txn = create_ro_unsync(&env);
     let db = txn.open_db(None).unwrap();
     // Note: setup_bench_db creates a named database which adds metadata to the
     // main database, so actual item count is n + 1
@@ -205,8 +205,8 @@ fn bench_get_seq_raw(c: &mut Criterion) {
     let n = 100;
     let (_dir, env) = setup_bench_db(n);
 
-    let dbi = env.begin_ro_txn().unwrap().open_db(None).unwrap().dbi();
-    let txn = env.begin_ro_txn().unwrap();
+    let dbi = create_ro_sync(&env).open_db(None).unwrap().dbi();
+    let txn = create_ro_sync(&env);
 
     let mut key = MDBX_val { iov_len: 0, iov_base: ptr::null_mut() };
     let mut data = MDBX_val { iov_len: 0, iov_base: ptr::null_mut() };

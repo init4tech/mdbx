@@ -53,7 +53,7 @@ where
         let mut cursor: *mut ffi::MDBX_cursor = ptr::null_mut();
         access.with_txn_ptr(|txn_ptr| unsafe {
             mdbx_result(ffi::mdbx_cursor_open(txn_ptr, db.dbi(), &mut cursor))
-        })??;
+        })?;
         Ok(Self { access, cursor, db, _kind: PhantomData })
     }
 
@@ -113,9 +113,7 @@ where
     /// This can be used to check if the cursor has valid data before
     /// performing operations that depend on cursor position.
     pub fn is_eof(&self) -> bool {
-        self.access
-            .with_txn_ptr(|_| unsafe { ffi::mdbx_cursor_eof(self.cursor) })
-            .unwrap_or(ffi::MDBX_RESULT_TRUE)
+        self.access.with_txn_ptr(|_| unsafe { ffi::mdbx_cursor_eof(self.cursor) })
             == ffi::MDBX_RESULT_TRUE
     }
 
@@ -182,7 +180,7 @@ where
                 let data_out = Value::decode_val::<K>(txn, data_val)?;
                 Ok((key_out, data_out, v))
             }
-        })?
+        })
     }
 
     fn get_value<Value>(
@@ -630,7 +628,7 @@ impl<'tx, K: TransactionKind + WriteMarker> Cursor<'tx, K> {
             };
             let pagesize = stat.ms_psize as usize;
             assertions::debug_assert_put(pagesize, self.db.flags(), key, data);
-        })?;
+        });
 
         let key_val: ffi::MDBX_val =
             ffi::MDBX_val { iov_len: key.len(), iov_base: key.as_ptr() as *mut c_void };
@@ -638,9 +636,8 @@ impl<'tx, K: TransactionKind + WriteMarker> Cursor<'tx, K> {
             ffi::MDBX_val { iov_len: data.len(), iov_base: data.as_ptr() as *mut c_void };
         mdbx_result(self.access.with_txn_ptr(|_| unsafe {
             ffi::mdbx_cursor_put(self.cursor, &key_val, &mut data_val, flags.bits())
-        })?)?;
-
-        Ok(())
+        }))
+        .map(drop)
     }
 
     /// Deletes the current key/data pair.
@@ -652,10 +649,9 @@ impl<'tx, K: TransactionKind + WriteMarker> Cursor<'tx, K> {
     pub fn del(&mut self, flags: WriteFlags) -> MdbxResult<()> {
         mdbx_result(
             self.access
-                .with_txn_ptr(|_| unsafe { ffi::mdbx_cursor_del(self.cursor, flags.bits()) })?,
-        )?;
-
-        Ok(())
+                .with_txn_ptr(|_| unsafe { ffi::mdbx_cursor_del(self.cursor, flags.bits()) }),
+        )
+        .map(drop)
     }
 
     /// Appends a key/data pair to the end of the database.
@@ -694,9 +690,8 @@ impl<'tx, K: TransactionKind + WriteMarker> Cursor<'tx, K> {
                     WriteFlags::APPEND.bits(),
                 )
             }
-        })?)?;
-
-        Ok(())
+        }))
+        .map(drop)
     }
 
     /// Appends duplicate data for [`DatabaseFlags::DUP_SORT`] databases.
@@ -740,9 +735,8 @@ impl<'tx, K: TransactionKind + WriteMarker> Cursor<'tx, K> {
                     WriteFlags::APPEND_DUP.bits(),
                 )
             }
-        })?)?;
-
-        Ok(())
+        }))
+        .map(drop)
     }
 }
 
@@ -751,7 +745,7 @@ where
     K: TransactionKind,
 {
     fn clone(&self) -> Self {
-        self.access.with_txn_ptr(|_| Self::new_at_position(self).unwrap()).unwrap()
+        self.access.with_txn_ptr(|_| Self::new_at_position(self).unwrap())
     }
 }
 
@@ -773,9 +767,7 @@ where
         //
         // To be able to close a cursor of a timed out transaction, we need to
         // renew it first. Hence the usage of `with_txn_ptr_for_cleanup` here.
-        let _ = self
-            .access
-            .with_txn_ptr_for_cleanup(|_| unsafe { ffi::mdbx_cursor_close(self.cursor) });
+        let _ = self.access.with_txn_ptr(|_| unsafe { ffi::mdbx_cursor_close(self.cursor) });
     }
 }
 

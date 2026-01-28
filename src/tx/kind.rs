@@ -64,7 +64,7 @@ pub trait TransactionKind: WriterKind + SyncKind {
             ))?;
         }
 
-        Ok(Self::Access::from_ptr_and_env(txn, env))
+        Ok(Self::Access::from_ptr_and_env(txn, env, Self::IS_READ_ONLY))
     }
 
     /// Create a new tracing span for this transaction kind.

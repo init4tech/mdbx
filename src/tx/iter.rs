@@ -229,7 +229,7 @@ where
                 ffi::MDBX_NOTFOUND | ffi::MDBX_ENODATA | ffi::MDBX_RESULT_TRUE => Ok(None),
                 other => Err(MdbxError::from_err_code(other).into()),
             }
-        })?
+        })
     }
 
     /// Borrow the next key/value pair from the iterator.
@@ -359,7 +359,7 @@ where
                     let res = ffi::mdbx_cursor_copy(cursor_ptr, new_cursor);
                     mdbx_result(res)?;
                     Ok::<_, MdbxError>(Cursor::new_raw(access, new_cursor, db))
-                })??;
+                })?;
 
                 Ok(Some(IterDupVals::from_owned_with(dup_cursor, (key, value))))
             }

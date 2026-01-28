@@ -91,7 +91,7 @@ impl<K: TransactionKind> Tx<K> {
 
     /// Creates a new transaction wrapper from raw pointer and environment.
     pub(crate) fn from_ptr_and_env(ptr: *mut ffi::MDBX_txn, env: Environment) -> Self {
-        let tx = K::Access::from_ptr_and_env(ptr, env.clone());
+        let tx = K::Access::from_ptr_and_env(ptr, env.clone(), K::IS_READ_ONLY);
         Self::from_access_and_env(tx, env)
     }
 
@@ -135,7 +135,7 @@ where
     K: TransactionKind,
 {
     /// Provides access to the raw transaction pointer.
-    fn with_txn_ptr<F, R>(&self, f: F) -> MdbxResult<R>
+    fn with_txn_ptr<F, R>(&self, f: F) -> R
     where
         F: FnOnce(*mut ffi::MDBX_txn) -> R,
     {
@@ -145,7 +145,7 @@ where
     /// Returns the transaction id.
     #[inline(always)]
     pub fn id(&self) -> MdbxResult<u64> {
-        self.with_txn_ptr(|txn_ptr| Ok(unsafe { ffi::mdbx_txn_id(txn_ptr) }))?
+        self.with_txn_ptr(|txn_ptr| Ok(unsafe { ffi::mdbx_txn_id(txn_ptr) }))
     }
 
     /// Gets an item from a database.
@@ -159,7 +159,7 @@ where
                 let data_val = ops::get_raw(txn_ptr, dbi, key)?;
                 data_val.map(|val| Key::decode_val::<K>(txn_ptr, val)).transpose()
             }
-        })?
+        })
     }
 
     /// Opens a handle to an MDBX database.
@@ -200,7 +200,7 @@ where
         let (dbi, db_flags) = self.with_txn_ptr(|txn_ptr| {
             // SAFETY: txn_ptr is valid from with_txn_ptr, name_ptr is valid or null.
             unsafe { ops::open_db_raw(txn_ptr, name_ptr, flags) }
-        })??;
+        })?;
 
         Ok(CachedDb::new(name, Database::new(dbi, db_flags)))
     }
@@ -216,7 +216,7 @@ where
         self.with_txn_ptr(|txn_ptr| {
             // SAFETY: txn_ptr is valid from with_txn_ptr.
             unsafe { ops::db_flags_raw(txn_ptr, dbi) }
-        })?
+        })
     }
 
     /// Retrieves database statistics.
@@ -229,7 +229,7 @@ where
         self.with_txn_ptr(|txn| {
             // SAFETY: txn is a valid transaction pointer from with_txn_ptr.
             unsafe { ops::db_stat_raw(txn, dbi) }
-        })?
+        })
     }
 
     /// Closes the database handle.
@@ -305,7 +305,7 @@ impl<K: TransactionKind + WriteMarker> Tx<K> {
         self.with_txn_ptr(|txn| {
             // SAFETY: txn is a valid RW transaction pointer from with_txn_ptr.
             unsafe { ops::put_raw(txn, db.dbi(), key, data, flags) }
-        })?
+        })
     }
 
     /// Appends a key/data pair to the end of the database.
@@ -334,7 +334,7 @@ impl<K: TransactionKind + WriteMarker> Tx<K> {
 
             // SAFETY: txn is a valid RW transaction pointer from with_txn_ptr.
             unsafe { ops::put_raw(txn, db.dbi(), key, data, WriteFlags::APPEND) }
-        })?
+        })
     }
 
     /// Appends duplicate data for [`DatabaseFlags::DUP_SORT`] databases.
@@ -369,7 +369,7 @@ impl<K: TransactionKind + WriteMarker> Tx<K> {
 
             // SAFETY: txn is a valid RW transaction pointer from with_txn_ptr.
             unsafe { ops::put_raw(txn, db.dbi(), key, data, WriteFlags::APPEND_DUP) }
-        })?
+        })
     }
 
     /// Returns a buffer which can be used to write a value into the item at the
@@ -405,7 +405,7 @@ impl<K: TransactionKind + WriteMarker> Tx<K> {
         let ptr = self.with_txn_ptr(|txn| {
             // SAFETY: txn is a valid RW transaction pointer from with_txn_ptr.
             unsafe { ops::reserve_raw(txn, db.dbi(), key, len, flags) }
-        })??;
+        })?;
         // SAFETY: ptr is valid from reserve_raw, len matches.
         Ok(unsafe { ops::slice_from_reserved(ptr, len) })
     }
@@ -459,7 +459,7 @@ impl<K: TransactionKind + WriteMarker> Tx<K> {
         self.with_txn_ptr(|txn| {
             // SAFETY: txn is a valid RW transaction pointer from with_txn_ptr.
             unsafe { ops::del_raw(txn, db.dbi(), key, data) }
-        })?
+        })
     }
 
     /// Empties the given database. All items will be removed.
@@ -467,7 +467,7 @@ impl<K: TransactionKind + WriteMarker> Tx<K> {
         self.with_txn_ptr(|txn| {
             // SAFETY: txn is a valid RW transaction pointer from with_txn_ptr.
             unsafe { ops::clear_db_raw(txn, db.dbi()) }
-        })?
+        })
     }
 
     /// Drops the database from the environment.
@@ -482,7 +482,7 @@ impl<K: TransactionKind + WriteMarker> Tx<K> {
             // SAFETY: txn is a valid RW transaction pointer, caller ensures
             // no other references to dbi exist.
             unsafe { ops::drop_db_raw(txn, db.dbi()) }
-        })??;
+        })?;
 
         self.cache.remove_dbi(db.dbi());
 
@@ -513,7 +513,7 @@ where
                 });
                 rx.recv().unwrap()
             }
-        })??;
+        })?;
 
         self.txn.mark_committed();
 
@@ -554,7 +554,7 @@ where
 
         // SAFETY: txn_ptr is valid from with_txn_ptr.
         let was_aborted =
-            self.with_txn_ptr(|txn_ptr| unsafe { ops::commit_raw(txn_ptr, latency) })??;
+            self.with_txn_ptr(|txn_ptr| unsafe { ops::commit_raw(txn_ptr, latency) })?;
 
         self.txn.mark_committed();
 
@@ -631,7 +631,7 @@ where
             });
 
             rx.recv().unwrap().map(|txn| Self::from_ptr_and_env(txn.0, self.env().clone()))
-        })?
+        })
     }
 }
 
@@ -657,7 +657,7 @@ where
                 ))?;
                 Ok(Self::from_ptr_and_env(nested_txn, self.env().clone()))
             }
-        })?
+        })
     }
 }
 

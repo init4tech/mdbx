@@ -1,5 +1,5 @@
 use crate::{
-    Environment, MdbxResult,
+    Environment,
     sys::txn_manager::{Abort, RawTxPtr},
 };
 use core::fmt;
@@ -33,29 +33,14 @@ mod sealed {
 pub trait TxPtrAccess: fmt::Debug + sealed::Sealed {
     /// Create an instance of the implementing type from a raw transaction
     /// pointer.
-    fn from_ptr_and_env(ptr: *mut ffi::MDBX_txn, env: Environment) -> Self
+    fn from_ptr_and_env(ptr: *mut ffi::MDBX_txn, env: Environment, is_read_only: bool) -> Self
     where
         Self: Sized;
 
     /// Execute a closure with the transaction pointer.
-    fn with_txn_ptr<F, R>(&self, f: F) -> MdbxResult<R>
+    fn with_txn_ptr<F, R>(&self, f: F) -> R
     where
         F: FnOnce(*mut ffi::MDBX_txn) -> R;
-
-    /// Execute a closure with the transaction pointer, attempting to renew
-    /// the transaction if it has timed out.
-    ///
-    /// This is primarily used for cleanup operations (like closing cursors)
-    /// that need to succeed even after a timeout. For implementations that
-    /// don't support renewal (like `RoGuard` after the Arc is dropped), this
-    /// falls back to `with_txn_ptr`.
-    fn with_txn_ptr_for_cleanup<F, R>(&self, f: F) -> MdbxResult<R>
-    where
-        F: FnOnce(*mut ffi::MDBX_txn) -> R,
-    {
-        // Default: just use the normal path
-        self.with_txn_ptr(f)
-    }
 
     /// Mark the transaction as committed.
     fn mark_committed(&self);
@@ -75,14 +60,14 @@ impl<T> TxPtrAccess for Arc<T>
 where
     T: TxPtrAccess,
 {
-    fn from_ptr_and_env(ptr: *mut ffi::MDBX_txn, env: Environment) -> Self
+    fn from_ptr_and_env(ptr: *mut ffi::MDBX_txn, env: Environment, is_read_only: bool) -> Self
     where
         Self: Sized,
     {
-        T::from_ptr_and_env(ptr, env).into()
+        T::from_ptr_and_env(ptr, env, is_read_only).into()
     }
 
-    fn with_txn_ptr<F, R>(&self, f: F) -> MdbxResult<R>
+    fn with_txn_ptr<F, R>(&self, f: F) -> R
     where
         F: FnOnce(*mut ffi::MDBX_txn) -> R,
     {
@@ -107,18 +92,18 @@ impl fmt::Debug for PtrUnsync {
 }
 
 impl TxPtrAccess for PtrUnsync {
-    fn from_ptr_and_env(ptr: *mut ffi::MDBX_txn, _env: Environment) -> Self
+    fn from_ptr_and_env(ptr: *mut ffi::MDBX_txn, _env: Environment, _is_read_only: bool) -> Self
     where
         Self: Sized,
     {
         Self { committed: AtomicBool::new(false), ptr }
     }
 
-    fn with_txn_ptr<F, R>(&self, f: F) -> MdbxResult<R>
+    fn with_txn_ptr<F, R>(&self, f: F) -> R
     where
         F: FnOnce(*mut ffi::MDBX_txn) -> R,
     {
-        Ok(f(self.ptr))
+        f(self.ptr)
     }
 
     fn mark_committed(&self) {
@@ -156,10 +141,13 @@ pub struct PtrSync {
 
     /// Contains a lock to ensure exclusive access to the transaction.
     /// The inner boolean indicates the timeout status.
-    lock: Mutex<bool>,
+    lock: Mutex<()>,
 
     /// The environment that owns the transaction.
     env: Environment,
+
+    /// Whether the transaction is read-only.
+    is_read_only: bool,
 }
 
 // SAFETY: Access to the transaction is synchronized by the lock.
@@ -171,7 +159,7 @@ unsafe impl Sync for PtrSync {}
 impl PtrSync {
     /// Acquires the inner transaction lock to guarantee exclusive access to the transaction
     /// pointer.
-    pub(crate) fn lock(&self) -> MutexGuard<'_, bool> {
+    pub(crate) fn lock(&self) -> MutexGuard<'_, ()> {
         if let Some(lock) = self.lock.try_lock() {
             lock
         } else {
@@ -185,47 +173,28 @@ impl PtrSync {
             self.lock.lock()
         }
     }
-
-    /// Executes the given closure once the lock on the transaction is
-    /// acquired. If the transaction is timed out, it will be renewed first.
-    ///
-    /// Returns the result of the closure or an error if the transaction renewal fails.
-    #[inline]
-    pub(crate) fn txn_execute_renew_on_timeout<F, T>(&self, f: F) -> MdbxResult<T>
-    where
-        F: FnOnce(*mut ffi::MDBX_txn) -> T,
-    {
-        let _lck = self.lock();
-
-        Ok((f)(self.txn))
-    }
 }
 
 impl TxPtrAccess for PtrSync {
-    fn from_ptr_and_env(ptr: *mut ffi::MDBX_txn, env: Environment) -> Self
+    fn from_ptr_and_env(ptr: *mut ffi::MDBX_txn, env: Environment, is_read_only: bool) -> Self
     where
         Self: Sized,
     {
-        Self { committed: AtomicBool::new(false), lock: Mutex::new(false), txn: ptr, env }
-    }
-
-    fn with_txn_ptr<F, R>(&self, f: F) -> MdbxResult<R>
-    where
-        F: FnOnce(*mut ffi::MDBX_txn) -> R,
-    {
-        let timeout_flag = self.lock();
-        if *timeout_flag {
-            return Err(crate::MdbxError::ReadTransactionTimeout);
+        Self {
+            committed: AtomicBool::new(false),
+            lock: Mutex::new(()),
+            txn: ptr,
+            env,
+            is_read_only,
         }
-        let result = f(self.txn);
-        Ok(result)
     }
 
-    fn with_txn_ptr_for_cleanup<F, R>(&self, f: F) -> MdbxResult<R>
+    fn with_txn_ptr<F, R>(&self, f: F) -> R
     where
         F: FnOnce(*mut ffi::MDBX_txn) -> R,
     {
-        self.txn_execute_renew_on_timeout(f)
+        let _lock = self.lock();
+        f(self.txn)
     }
 
     fn mark_committed(&self) {
@@ -239,16 +208,20 @@ impl Drop for PtrSync {
             return;
         }
 
-        // For simplicity, we always abort via the transaction manager.
-        // RO transactions could be aborted directly, but this keeps the logic
-        // uniform.
-        let (sender, rx) = sync_channel(0);
-        self.env.txn_manager().send(Abort {
-            tx: RawTxPtr(self.txn),
-            sender,
-            span: debug_span!("txn_manager_abort"),
-        });
-        rx.recv().unwrap().unwrap();
+        if self.is_read_only {
+            // RO: direct abort is safe and fast.
+            // SAFETY: We have exclusive ownership of this pointer.
+            unsafe { ffi::mdbx_txn_abort(self.txn) };
+        } else {
+            // RW: must go through txn manager for thread safety.
+            let (sender, rx) = sync_channel(0);
+            self.env.txn_manager().send(Abort {
+                tx: RawTxPtr(self.txn),
+                sender,
+                span: debug_span!("txn_manager_abort"),
+            });
+            rx.recv().unwrap().unwrap();
+        }
         tracing::debug!(target: "libmdbx", "aborted");
     }
 }

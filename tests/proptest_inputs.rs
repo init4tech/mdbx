@@ -35,7 +35,7 @@ proptest! {
     fn put_get_arbitrary_kv_v1(key in arb_bytes(), value in arb_bytes()) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let txn = env.begin_rw_txn().unwrap();
+        let txn = env.begin_rw_sync().unwrap();
         let db = txn.open_db(None).unwrap();
 
         // Should not panic - may return error for invalid sizes
@@ -52,7 +52,7 @@ proptest! {
     fn del_nonexistent_key_v1(key in arb_bytes()) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let txn = env.begin_rw_txn().unwrap();
+        let txn = env.begin_rw_sync().unwrap();
         let db = txn.open_db(None).unwrap();
 
         // Delete on nonexistent key should return Ok(false), not panic
@@ -66,7 +66,7 @@ proptest! {
     fn get_arbitrary_key_empty_db_v1(key in arb_bytes()) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let txn = env.begin_ro_txn().unwrap();
+        let txn = env.begin_ro_sync().unwrap();
         let db = txn.open_db(None).unwrap();
 
         // Get on nonexistent key should return Ok(None), not panic
@@ -88,7 +88,7 @@ proptest! {
     fn put_get_arbitrary_kv_v2(key in arb_bytes(), value in arb_bytes()) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let mut txn = env.begin_rw_unsync().unwrap();
+        let txn = env.begin_rw_unsync().unwrap();
         let db = txn.open_db(None).unwrap();
 
         // Should not panic - may return error for invalid sizes
@@ -105,7 +105,7 @@ proptest! {
     fn del_nonexistent_key_v2(key in arb_bytes()) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let mut txn = env.begin_rw_unsync().unwrap();
+        let txn = env.begin_rw_unsync().unwrap();
         let db = txn.open_db(None).unwrap();
 
         // Delete on nonexistent key should return Ok(false), not panic
@@ -119,7 +119,7 @@ proptest! {
     fn get_arbitrary_key_empty_db_v2(key in arb_bytes()) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let mut txn = env.begin_ro_unsync().unwrap();
+        let txn = env.begin_ro_unsync().unwrap();
         let db = txn.open_db(None).unwrap();
 
         // Get on nonexistent key should return Ok(None), not panic
@@ -141,7 +141,7 @@ proptest! {
     fn cursor_set_arbitrary_key_v1(key in arb_bytes()) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let txn = env.begin_rw_txn().unwrap();
+        let txn = env.begin_rw_sync().unwrap();
         let db = txn.open_db(None).unwrap();
 
         // Add some data so cursor is positioned
@@ -159,7 +159,7 @@ proptest! {
     fn cursor_set_range_arbitrary_key_v1(key in arb_bytes()) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let txn = env.begin_rw_txn().unwrap();
+        let txn = env.begin_rw_sync().unwrap();
         let db = txn.open_db(None).unwrap();
 
         // Add some data
@@ -179,7 +179,7 @@ proptest! {
     fn cursor_set_key_arbitrary_v1(key in arb_bytes()) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let txn = env.begin_rw_txn().unwrap();
+        let txn = env.begin_rw_sync().unwrap();
         let db = txn.open_db(None).unwrap();
 
         txn.put(db, b"test", b"value", WriteFlags::empty()).unwrap();
@@ -197,7 +197,7 @@ proptest! {
     fn cursor_set_arbitrary_key_v2(key in arb_bytes()) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let mut txn = env.begin_rw_unsync().unwrap();
+        let txn = env.begin_rw_unsync().unwrap();
         let db = txn.open_db(None).unwrap();
 
         txn.put(db, b"test_key", b"test_val", WriteFlags::empty()).unwrap();
@@ -213,7 +213,7 @@ proptest! {
     fn cursor_set_range_arbitrary_key_v2(key in arb_bytes()) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let mut txn = env.begin_rw_unsync().unwrap();
+        let txn = env.begin_rw_unsync().unwrap();
         let db = txn.open_db(None).unwrap();
 
         txn.put(db, b"aaa", b"val_a", WriteFlags::empty()).unwrap();
@@ -231,7 +231,7 @@ proptest! {
     fn cursor_set_key_arbitrary_v2(key in arb_bytes()) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let mut txn = env.begin_rw_unsync().unwrap();
+        let txn = env.begin_rw_unsync().unwrap();
         let db = txn.open_db(None).unwrap();
 
         txn.put(db, b"test", b"value", WriteFlags::empty()).unwrap();
@@ -259,7 +259,7 @@ proptest! {
             .set_max_dbs(16)
             .open(dir.path())
             .unwrap();
-        let txn = env.begin_rw_txn().unwrap();
+        let txn = env.begin_rw_sync().unwrap();
 
         // create_db should not panic, may return error for invalid names
         let result = txn.create_db(Some(&name), DatabaseFlags::empty());
@@ -275,7 +275,7 @@ proptest! {
             .set_max_dbs(16)
             .open(dir.path())
             .unwrap();
-        let mut txn = env.begin_rw_unsync().unwrap();
+        let txn = env.begin_rw_unsync().unwrap();
 
         let result = txn.create_db(Some(&name), DatabaseFlags::empty());
         let _ = result;
@@ -297,7 +297,7 @@ proptest! {
     ) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let txn = env.begin_rw_txn().unwrap();
+        let txn = env.begin_rw_sync().unwrap();
         let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
 
         for value in &values {
@@ -316,7 +316,7 @@ proptest! {
     ) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let mut txn = env.begin_rw_unsync().unwrap();
+        let txn = env.begin_rw_unsync().unwrap();
         let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
 
         for value in &values {
@@ -333,7 +333,7 @@ proptest! {
     ) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let txn = env.begin_rw_txn().unwrap();
+        let txn = env.begin_rw_sync().unwrap();
         let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
 
         // Add some data
@@ -356,7 +356,7 @@ proptest! {
     ) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let txn = env.begin_rw_txn().unwrap();
+        let txn = env.begin_rw_sync().unwrap();
         let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
 
         txn.put(db, b"key1", b"val1", WriteFlags::empty()).unwrap();
@@ -378,7 +378,7 @@ proptest! {
     ) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let mut txn = env.begin_rw_unsync().unwrap();
+        let txn = env.begin_rw_unsync().unwrap();
         let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
 
         txn.put(db, b"key1", b"val1", WriteFlags::empty()).unwrap();
@@ -399,7 +399,7 @@ proptest! {
     ) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let mut txn = env.begin_rw_unsync().unwrap();
+        let txn = env.begin_rw_unsync().unwrap();
         let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
 
         txn.put(db, b"key1", b"val1", WriteFlags::empty()).unwrap();
@@ -425,7 +425,7 @@ proptest! {
     fn iter_from_arbitrary_key_v1(key in arb_bytes()) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let txn = env.begin_rw_txn().unwrap();
+        let txn = env.begin_rw_sync().unwrap();
         let db = txn.open_db(None).unwrap();
 
         // Add some data
@@ -449,7 +449,7 @@ proptest! {
     fn iter_from_arbitrary_key_v2(key in arb_bytes()) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let mut txn = env.begin_rw_unsync().unwrap();
+        let txn = env.begin_rw_unsync().unwrap();
         let db = txn.open_db(None).unwrap();
 
         for i in 0u8..10 {
@@ -470,7 +470,7 @@ proptest! {
     fn iter_dup_of_arbitrary_key_v1(key in arb_bytes()) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let txn = env.begin_rw_txn().unwrap();
+        let txn = env.begin_rw_sync().unwrap();
         let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
 
         // Add some dup data
@@ -493,7 +493,7 @@ proptest! {
     fn iter_dup_from_arbitrary_key_v1(key in arb_bytes()) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let txn = env.begin_rw_txn().unwrap();
+        let txn = env.begin_rw_sync().unwrap();
         let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
 
         for i in 0u8..5 {
@@ -518,7 +518,7 @@ proptest! {
     fn iter_dup_of_arbitrary_key_v2(key in arb_bytes()) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let mut txn = env.begin_rw_unsync().unwrap();
+        let txn = env.begin_rw_unsync().unwrap();
         let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
 
         for i in 0u8..5 {
@@ -538,7 +538,7 @@ proptest! {
     fn iter_dup_from_arbitrary_key_v2(key in arb_bytes()) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let mut txn = env.begin_rw_unsync().unwrap();
+        let txn = env.begin_rw_unsync().unwrap();
         let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
 
         for i in 0u8..5 {
@@ -578,7 +578,7 @@ proptest! {
     fn cursor_put_arbitrary_v1(key in arb_safe_key(), value in arb_bytes()) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let txn = env.begin_rw_txn().unwrap();
+        let txn = env.begin_rw_sync().unwrap();
         let db = txn.open_db(None).unwrap();
 
         let mut cursor = txn.cursor(db).unwrap();
@@ -594,7 +594,7 @@ proptest! {
     fn cursor_put_arbitrary_v2(key in arb_safe_key(), value in arb_bytes()) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let mut txn = env.begin_rw_unsync().unwrap();
+        let txn = env.begin_rw_unsync().unwrap();
         let db = txn.open_db(None).unwrap();
 
         let mut cursor = txn.cursor(db).unwrap();
@@ -616,7 +616,7 @@ proptest! {
     fn empty_key_operations_v1(value in arb_bytes()) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let txn = env.begin_rw_txn().unwrap();
+        let txn = env.begin_rw_sync().unwrap();
         let db = txn.open_db(None).unwrap();
 
         // Empty key should be valid
@@ -639,7 +639,7 @@ proptest! {
 
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let txn = env.begin_rw_txn().unwrap();
+        let txn = env.begin_rw_sync().unwrap();
         let db = txn.open_db(None).unwrap();
 
         // Empty value should be valid
@@ -657,7 +657,7 @@ proptest! {
     fn empty_key_operations_v2(value in arb_bytes()) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let mut txn = env.begin_rw_unsync().unwrap();
+        let txn = env.begin_rw_unsync().unwrap();
         let db = txn.open_db(None).unwrap();
 
         let put_result = txn.put(db, b"", &value, WriteFlags::empty());
@@ -678,7 +678,7 @@ proptest! {
 
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let mut txn = env.begin_rw_unsync().unwrap();
+        let txn = env.begin_rw_unsync().unwrap();
         let db = txn.open_db(None).unwrap();
 
         let put_result = txn.put(db, &key, b"", WriteFlags::empty());
@@ -703,7 +703,7 @@ proptest! {
     fn roundtrip_correctness_v1(key in arb_safe_key(), value in arb_bytes()) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let txn = env.begin_rw_txn().unwrap();
+        let txn = env.begin_rw_sync().unwrap();
         let db = txn.open_db(None).unwrap();
 
         let put_result = txn.put(db, &key, &value, WriteFlags::empty());
@@ -726,7 +726,7 @@ proptest! {
     fn roundtrip_correctness_v2(key in arb_safe_key(), value in arb_bytes()) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let mut txn = env.begin_rw_unsync().unwrap();
+        let txn = env.begin_rw_unsync().unwrap();
         let db = txn.open_db(None).unwrap();
 
         let put_result = txn.put(db, &key, &value, WriteFlags::empty());
@@ -753,7 +753,7 @@ proptest! {
     ) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let txn = env.begin_rw_txn().unwrap();
+        let txn = env.begin_rw_sync().unwrap();
         let db = txn.open_db(None).unwrap();
 
         let put1 = txn.put(db, &key, &value1, WriteFlags::empty());
@@ -782,7 +782,7 @@ proptest! {
     ) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let mut txn = env.begin_rw_unsync().unwrap();
+        let txn = env.begin_rw_unsync().unwrap();
         let db = txn.open_db(None).unwrap();
 
         let put1 = txn.put(db, &key, &value1, WriteFlags::empty());
@@ -807,7 +807,7 @@ proptest! {
     fn delete_correctness_v1(key in arb_safe_key(), value in arb_bytes()) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let txn = env.begin_rw_txn().unwrap();
+        let txn = env.begin_rw_sync().unwrap();
         let db = txn.open_db(None).unwrap();
 
         let put_result = txn.put(db, &key, &value, WriteFlags::empty());
@@ -833,7 +833,7 @@ proptest! {
     fn delete_correctness_v2(key in arb_safe_key(), value in arb_bytes()) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let mut txn = env.begin_rw_unsync().unwrap();
+        let txn = env.begin_rw_unsync().unwrap();
         let db = txn.open_db(None).unwrap();
 
         let put_result = txn.put(db, &key, &value, WriteFlags::empty());
@@ -862,7 +862,7 @@ proptest! {
     ) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let txn = env.begin_rw_txn().unwrap();
+        let txn = env.begin_rw_sync().unwrap();
         let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
 
         // Insert all values
@@ -910,7 +910,7 @@ proptest! {
     ) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let mut txn = env.begin_rw_unsync().unwrap();
+        let txn = env.begin_rw_unsync().unwrap();
         let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
 
         let mut inserted: Vec<Vec<u8>> = Vec::new();
@@ -953,7 +953,7 @@ proptest! {
     ) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let txn = env.begin_rw_txn().unwrap();
+        let txn = env.begin_rw_sync().unwrap();
         let db = txn.open_db(None).unwrap();
 
         // Insert all entries
@@ -998,7 +998,7 @@ proptest! {
     ) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let mut txn = env.begin_rw_unsync().unwrap();
+        let txn = env.begin_rw_unsync().unwrap();
         let db = txn.open_db(None).unwrap();
 
         let mut inserted_keys: Vec<Vec<u8>> = Vec::new();
@@ -1038,7 +1038,7 @@ proptest! {
     fn cursor_set_correctness_v1(key in arb_safe_key(), value in arb_bytes()) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let txn = env.begin_rw_txn().unwrap();
+        let txn = env.begin_rw_sync().unwrap();
         let db = txn.open_db(None).unwrap();
 
         let put_result = txn.put(db, &key, &value, WriteFlags::empty());
@@ -1062,7 +1062,7 @@ proptest! {
     fn cursor_set_correctness_v2(key in arb_safe_key(), value in arb_bytes()) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let mut txn = env.begin_rw_unsync().unwrap();
+        let txn = env.begin_rw_unsync().unwrap();
         let db = txn.open_db(None).unwrap();
 
         let put_result = txn.put(db, &key, &value, WriteFlags::empty());
@@ -1089,7 +1089,7 @@ proptest! {
     ) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let txn = env.begin_rw_txn().unwrap();
+        let txn = env.begin_rw_sync().unwrap();
         let db = txn.open_db(None).unwrap();
 
         let mut inserted: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
@@ -1132,7 +1132,7 @@ proptest! {
     ) {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
-        let mut txn = env.begin_rw_unsync().unwrap();
+        let txn = env.begin_rw_unsync().unwrap();
         let db = txn.open_db(None).unwrap();
 
         let mut inserted: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();

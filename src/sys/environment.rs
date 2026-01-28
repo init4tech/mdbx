@@ -1,9 +1,9 @@
 use crate::{
-    Database, Mode, RO, RW, SyncMode, TransactionKind, TxSync,
+    Database, Mode, SyncMode,
     error::{MdbxError, MdbxResult, ReadResult, mdbx_result},
     flags::EnvironmentFlags,
-    sys::txn_manager::{RawTxPtr, TxnManager, TxnManagerMessage},
-    tx::unsync::TxUnsync,
+    sys::txn_manager::{LifecycleHandle, RwSyncLifecycle},
+    tx::{RoTxSync, RoTxUnsync, RwTxSync, RwTxUnsync},
 };
 use byteorder::{ByteOrder, NativeEndian};
 use mem::size_of;
@@ -14,15 +14,9 @@ use std::{
     ops::{Bound, RangeBounds},
     path::Path,
     ptr,
-    sync::{Arc, mpsc::sync_channel},
-    thread::sleep,
+    sync::Arc,
     time::Duration,
 };
-use tracing::warn;
-
-/// The default maximum duration of a read transaction.
-#[cfg(feature = "read-tx-timeouts")]
-const DEFAULT_MAX_READ_TRANSACTION_DURATION: Duration = Duration::from_secs(5 * 60);
 
 /// An environment supports multiple databases, all residing in the same shared-memory map.
 ///
@@ -52,8 +46,6 @@ impl Environment {
             log_level: None,
             kind: Default::default(),
             handle_slow_readers: None,
-            #[cfg(feature = "read-tx-timeouts")]
-            max_read_transaction_duration: None,
         }
     }
 
@@ -83,47 +75,21 @@ impl Environment {
 
     /// Returns the transaction manager.
     #[inline]
-    pub(crate) fn txn_manager(&self) -> &TxnManager {
+    pub(crate) fn txn_manager(&self) -> &LifecycleHandle {
         &self.inner.txn_manager
-    }
-
-    /// Returns the number of timed out transactions that were not aborted by the user yet.
-    #[cfg(feature = "read-tx-timeouts")]
-    pub fn timed_out_not_aborted_transactions(&self) -> usize {
-        self.inner.txn_manager.timed_out_not_aborted_read_transactions().unwrap_or(0)
     }
 
     /// Create a read-only transaction for use with the environment.
     #[inline]
-    pub fn begin_ro_txn(&self) -> MdbxResult<TxSync<RO>> {
-        TxSync::<RO>::new(self.clone())
+    pub fn begin_ro_sync(&self) -> MdbxResult<RoTxSync> {
+        RoTxSync::begin(self.clone())
     }
 
     /// Create a read-write transaction for use with the environment. This
     /// method will block while there are any other read-write transactions
     /// open on the environment.
-    pub fn begin_rw_txn(&self) -> MdbxResult<TxSync<RW>> {
-        let mut warned = false;
-        let txn = loop {
-            let (tx, rx) = sync_channel(0);
-            self.txn_manager().send_message(TxnManagerMessage::Begin {
-                parent: RawTxPtr(ptr::null_mut()),
-                flags: RW::OPEN_FLAGS,
-                sender: tx,
-            });
-            let res = rx.recv().unwrap();
-            if matches!(&res, Err(MdbxError::Busy)) {
-                if !warned {
-                    warned = true;
-                    warn!(target: "libmdbx", "Process stalled, awaiting read-write transaction lock.");
-                }
-                sleep(Duration::from_millis(250));
-                continue;
-            }
-
-            break res;
-        }?;
-        Ok(TxSync::new_from_ptr(self.clone(), txn.0))
+    pub fn begin_rw_sync(&self) -> MdbxResult<RwTxSync> {
+        RwTxSync::begin(self.clone())
     }
 
     /// Create a single-threaded read-only transaction for use with the
@@ -135,8 +101,8 @@ impl Environment {
     ///
     /// If the `read-tx-timeouts` feature is enabled, the transaction will
     /// have a default timeout applied.
-    pub fn begin_ro_unsync(&self) -> MdbxResult<TxUnsync<RO>> {
-        TxUnsync::<RO>::new(self.clone())
+    pub fn begin_ro_unsync(&self) -> MdbxResult<RoTxUnsync> {
+        RoTxUnsync::begin(self.clone())
     }
 
     /// Create a single-threaded read-write transaction for use with the
@@ -146,36 +112,8 @@ impl Environment {
     /// The returned Tx is `!Send` and `!Sync`. As a result, it saves about 30%
     /// overhead on transaction operations compared to the multi-threaded
     /// version, but cannot be sent or shared between threads.
-    pub fn begin_rw_unsync(&self) -> MdbxResult<TxUnsync<RW>> {
-        TxUnsync::<RW>::new(self.clone())
-    }
-
-    /// Create a single-threaded read-only transaction without a timeout for use
-    /// with the environment.
-    ///
-    /// The returned Tx is `!Sync`. As a result, it saves about 30% overhead on
-    /// transaction operations compared to the multi-threaded version, but
-    /// cannot be sent or shared between threads.
-    ///
-    /// Instantiating a read-only transaction without a timeout is not
-    /// recommended, as it may lead to resource exhaustion if done excessively.
-    #[cfg(feature = "read-tx-timeouts")]
-    pub fn begin_ro_single_thread_no_timeout(&self) -> MdbxResult<TxUnsync<RO>> {
-        TxUnsync::<RO>::new_no_timeout(self.clone())
-    }
-
-    /// Create a single-threaded read-only transaction with a custom timeout
-    /// for use with the environment.
-    ///
-    /// The returned Tx is `!Sync`. As a result, it saves about 30% overhead on
-    /// transaction operations compared to the multi-threaded version, but
-    /// cannot be sent or shared between threads.
-    #[cfg(feature = "read-tx-timeouts")]
-    pub fn begin_ro_single_thread_with_timeout(
-        &self,
-        duration: Duration,
-    ) -> MdbxResult<TxUnsync<RO>> {
-        TxUnsync::<RO>::new_with_timeout(self.clone(), duration)
+    pub fn begin_rw_unsync(&self) -> MdbxResult<RwTxUnsync> {
+        RwTxUnsync::begin(self.clone())
     }
 
     /// Returns a raw pointer to the underlying MDBX environment.
@@ -261,7 +199,7 @@ impl Environment {
     /// * It will create a read transaction to traverse the freelist database.
     pub fn freelist(&self) -> ReadResult<usize> {
         let mut freelist: usize = 0;
-        let txn = self.begin_ro_txn()?;
+        let txn = self.begin_ro_unsync()?;
         let db = Database::freelist_db();
         let mut cursor = txn.cursor(db)?;
         let mut iter = cursor.iter_slices();
@@ -293,7 +231,7 @@ struct EnvironmentInner {
     /// Whether the environment was opened as WRITEMAP.
     env_kind: EnvironmentKind,
     /// Transaction manager
-    txn_manager: TxnManager,
+    txn_manager: LifecycleHandle,
 }
 
 impl Drop for EnvironmentInner {
@@ -676,11 +614,6 @@ pub struct EnvironmentBuilder {
     log_level: Option<ffi::MDBX_log_level_t>,
     kind: EnvironmentKind,
     handle_slow_readers: Option<HandleSlowReadersCallback>,
-    #[cfg(feature = "read-tx-timeouts")]
-    /// The maximum duration of a read transaction. If [None], but the
-    /// `read-tx-timeout` feature is enabled, the default value of
-    /// [`DEFAULT_MAX_READ_TRANSACTION_DURATION`] is used.
-    max_read_transaction_duration: Option<read_transactions::MaxReadTransactionDuration>,
 }
 
 impl EnvironmentBuilder {
@@ -812,22 +745,7 @@ impl EnvironmentBuilder {
 
         let env_ptr = EnvPtr(env);
 
-        #[cfg(not(feature = "read-tx-timeouts"))]
-        let txn_manager = TxnManager::new(env_ptr);
-
-        #[cfg(feature = "read-tx-timeouts")]
-        let txn_manager = {
-            if let crate::MaxReadTransactionDuration::Set(duration) = self
-                .max_read_transaction_duration
-                .unwrap_or(read_transactions::MaxReadTransactionDuration::Set(
-                    DEFAULT_MAX_READ_TRANSACTION_DURATION,
-                ))
-            {
-                TxnManager::new_with_max_read_transaction_duration(env_ptr, duration)
-            } else {
-                TxnManager::new(env_ptr)
-            }
-        };
+        let txn_manager = RwSyncLifecycle::spawn(env_ptr);
 
         let env = EnvironmentInner { env, txn_manager, env_kind: self.kind };
 
@@ -964,44 +882,6 @@ impl EnvironmentBuilder {
     }
 }
 
-#[cfg(feature = "read-tx-timeouts")]
-pub(crate) mod read_transactions {
-    use crate::EnvironmentBuilder;
-    use std::time::Duration;
-
-    /// The maximum duration of a read transaction.
-    #[derive(Debug, Clone, Copy)]
-    #[cfg(feature = "read-tx-timeouts")]
-    pub enum MaxReadTransactionDuration {
-        /// The maximum duration of a read transaction is unbounded.
-        Unbounded,
-        /// The maximum duration of a read transaction is set to the given duration.
-        Set(Duration),
-    }
-
-    #[cfg(feature = "read-tx-timeouts")]
-    impl MaxReadTransactionDuration {
-        /// Returns the duration if set, otherwise None for unbounded.
-        pub const fn as_duration(&self) -> Option<Duration> {
-            match self {
-                Self::Unbounded => None,
-                Self::Set(duration) => Some(*duration),
-            }
-        }
-    }
-
-    impl EnvironmentBuilder {
-        /// Set the maximum time a read-only transaction can be open.
-        pub const fn set_max_read_transaction_duration(
-            &mut self,
-            max_read_transaction_duration: MaxReadTransactionDuration,
-        ) -> &mut Self {
-            self.max_read_transaction_duration = Some(max_read_transaction_duration);
-            self
-        }
-    }
-}
-
 /// Converts a [`HandleSlowReadersCallback`] to the actual FFI function pointer.
 fn convert_hsr_fn(callback: Option<HandleSlowReadersCallback>) -> ffi::MDBX_hsr_func {
     unsafe { std::mem::transmute(callback) }
@@ -1049,7 +929,7 @@ mod tests {
 
         // Insert some data in the database, so the read transaction can lock on the snapshot of it
         {
-            let tx = env.begin_rw_txn().unwrap();
+            let tx = env.begin_rw_sync().unwrap();
             let db = tx.open_db(None).unwrap();
             for i in 0usize..1_000 {
                 tx.put(db, i.to_le_bytes(), b"0", WriteFlags::empty()).unwrap()
@@ -1058,11 +938,10 @@ mod tests {
         }
 
         // Create a read transaction
-        let _tx_ro = env.begin_ro_txn().unwrap();
-
+        let _tx_ro = env.begin_ro_sync().unwrap();
         // Change previously inserted data, so the read transaction would use the previous snapshot
         {
-            let tx = env.begin_rw_txn().unwrap();
+            let tx = env.begin_rw_sync().unwrap();
             let db = tx.open_db(None).unwrap();
             for i in 0usize..1_000 {
                 tx.put(db, i.to_le_bytes(), b"1", WriteFlags::empty()).unwrap();
@@ -1073,7 +952,7 @@ mod tests {
         // Insert more data in the database, so we hit the DB size limit error, and MDBX tries to
         // kick long-lived readers and delete their snapshots
         {
-            let tx = env.begin_rw_txn().unwrap();
+            let tx = env.begin_rw_sync().unwrap();
             let db = tx.open_db(None).unwrap();
             for i in 1_000usize..1_000_000 {
                 match tx.put(db, i.to_le_bytes(), b"0", WriteFlags::empty()) {

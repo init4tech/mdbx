@@ -24,13 +24,12 @@
 //! ways transaction pointers are stored and accessed.
 //!
 
-mod access;
-pub(crate) use access::PtrSync;
-pub use access::{PtrSyncInner, RoGuard, RwUnsync, TxPtrAccess};
 mod assertions;
 
-mod cache;
-pub(crate) use cache::{CachedDb, SharedCache};
+mod access;
+pub use access::{PtrSync, PtrUnsync, TxPtrAccess};
+
+pub mod cache;
 
 mod cursor;
 pub use cursor::{Cursor, RoCursorSync, RoCursorUnsync, RwCursorSync, RwCursorUnsync};
@@ -42,31 +41,13 @@ pub mod iter;
 pub use iter::{RoIterSync, RoIterUnsync, RwIterSync, RwIterUnsync};
 
 mod kind;
-pub use kind::{RO, RW, TransactionKind};
+pub use kind::{Ro, RoSync, Rw, RwSync, TransactionKind, WriteMarker};
+
+mod lat;
+pub use lat::CommitLatency;
 
 /// Raw operations on transactions.
 pub mod ops;
 
-mod sync;
-#[allow(unused_imports)] // this is used in some features
-pub use sync::{CommitLatency, TxSync};
-
-pub mod unsync;
-pub use unsync::TxUnsync;
-
-/// A synchronized read-only transaction.
-pub type RoTxSync = TxSync<RO>;
-
-/// A synchronized read-write transaction.
-pub type RwTxSync = TxSync<RW>;
-
-/// An unsynchronized read-only transaction.
-pub type RoTxUnsync = TxUnsync<RO>;
-
-/// An unsynchronized read-write transaction.
-pub type RwTxUnsync = TxUnsync<RW>;
-
-/// The default maximum duration of a read transaction.
-#[cfg(feature = "read-tx-timeouts")]
-pub const DEFAULT_MAX_READ_TRANSACTION_DURATION: std::time::Duration =
-    std::time::Duration::from_secs(5 * 60);
+mod r#impl;
+pub use r#impl::{RoTxSync, RoTxUnsync, RwTxSync, RwTxUnsync, TxSync, TxUnsync};

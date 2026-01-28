@@ -1,10 +1,11 @@
 use crate::{
-    Database, MdbxError, RW, ReadResult, TableObject, TransactionKind, codec_try_optional,
+    Database, MdbxError, ReadResult, TableObject, TransactionKind, codec_try_optional,
     error::{MdbxResult, mdbx_result},
     flags::*,
     tx::{
         TxPtrAccess, assertions,
         iter::{Iter, IterDup, IterDupVals, IterKeyVals},
+        kind::WriteMarker,
     },
 };
 use ffi::{
@@ -15,30 +16,40 @@ use ffi::{
 };
 use std::{ffi::c_void, fmt, marker::PhantomData, ptr};
 
+/// A read-only cursor for a synchronized transaction.
+pub type RoCursorSync<'tx> = Cursor<'tx, crate::RoSync>;
+
+/// A read-write cursor for a synchronized transaction.
+pub type RwCursorSync<'tx> = Cursor<'tx, crate::RwSync>;
+
+/// A read-only cursor for an unsynchronized transaction.
+pub type RoCursorUnsync<'tx> = Cursor<'tx, crate::Ro>;
+
+/// A read-write cursor for an unsynchronized transaction.
+pub type RwCursorUnsync<'tx> = Cursor<'tx, crate::Rw>;
+
 /// A cursor for navigating the items within a database.
 ///
 /// The cursor is generic over the transaction kind `K` and the access type `A`.
 /// The access type determines how the cursor accesses the underlying transaction
 /// pointer, allowing the same cursor implementation to work with different
 /// transaction implementations.
-pub struct Cursor<'tx, K, A>
+pub struct Cursor<'tx, K>
 where
     K: TransactionKind,
-    A: TxPtrAccess,
 {
-    access: &'tx A,
+    access: &'tx K::Access,
     cursor: *mut ffi::MDBX_cursor,
     db: Database,
     _kind: PhantomData<K>,
 }
 
-impl<'tx, K, A> Cursor<'tx, K, A>
+impl<'tx, K> Cursor<'tx, K>
 where
     K: TransactionKind,
-    A: TxPtrAccess,
 {
     /// Creates a new cursor from a reference to a transaction access type.
-    pub(crate) fn new(access: &'tx A, db: Database) -> MdbxResult<Self> {
+    pub(crate) fn new(access: &'tx K::Access, db: Database) -> MdbxResult<Self> {
         let mut cursor: *mut ffi::MDBX_cursor = ptr::null_mut();
         access.with_txn_ptr(|txn_ptr| unsafe {
             mdbx_result(ffi::mdbx_cursor_open(txn_ptr, db.dbi(), &mut cursor))
@@ -50,10 +61,11 @@ where
     ///
     /// This function must only be used when you are certain that the provided
     /// cursor pointer is valid and associated with the given access type.
-    pub(crate) const fn new_raw(access: &'tx A, cursor: *mut ffi::MDBX_cursor, db: Database) -> Self
-    where
-        A: Sized,
-    {
+    pub(crate) const fn new_raw(
+        access: &'tx K::Access,
+        cursor: *mut ffi::MDBX_cursor,
+        db: Database,
+    ) -> Self {
         Self { access, cursor, db, _kind: PhantomData }
     }
 
@@ -74,10 +86,7 @@ where
     }
 
     /// Returns a reference to the transaction access type.
-    pub(crate) const fn access(&self) -> &'tx A
-    where
-        A: Sized,
-    {
+    pub(crate) const fn access(&self) -> &'tx K::Access {
         self.access
     }
 
@@ -453,7 +462,7 @@ where
     /// For databases with duplicate data items ([`DatabaseFlags::DUP_SORT`]),
     /// the duplicate data items of each key will be returned before moving on
     /// to the next key.
-    pub fn iter<'cur, Key, Value>(&'cur mut self) -> IterKeyVals<'tx, 'cur, K, A, Key, Value>
+    pub fn iter<'cur, Key, Value>(&'cur mut self) -> IterKeyVals<'tx, 'cur, K, Key, Value>
     where
         'tx: 'cur,
         Key: TableObject<'tx>,
@@ -474,7 +483,7 @@ where
     /// The iterator will begin with item next after the cursor, and continue
     /// until the end of the database. For new cursors, the iterator will begin
     /// with the first item in the database.
-    pub fn iter_slices<'cur>(&'cur mut self) -> IterKeyVals<'tx, 'cur, K, A>
+    pub fn iter_slices<'cur>(&'cur mut self) -> IterKeyVals<'tx, 'cur, K>
     where
         'tx: 'cur,
     {
@@ -488,7 +497,7 @@ where
     /// to the next key.
     pub fn iter_start<'cur, Key, Value>(
         &'cur mut self,
-    ) -> ReadResult<Iter<'tx, 'cur, K, A, Key, Value>>
+    ) -> ReadResult<Iter<'tx, 'cur, K, Key, Value>>
     where
         'tx: 'cur,
         Key: TableObject<'tx>,
@@ -509,7 +518,7 @@ where
     pub fn iter_from<'cur, Key, Value>(
         &'cur mut self,
         key: &[u8],
-    ) -> ReadResult<Iter<'tx, 'cur, K, A, Key, Value>>
+    ) -> ReadResult<Iter<'tx, 'cur, K, Key, Value>>
     where
         'tx: 'cur,
         Key: TableObject<'tx>,
@@ -534,7 +543,7 @@ where
     ///
     /// If the cursor is at EOF or not positioned (e.g., after exhausting a
     /// previous iteration), it will be repositioned to the first item.
-    pub fn iter_dup<'cur, Key, Value>(&'cur mut self) -> IterDup<'tx, 'cur, K, A, Key, Value>
+    pub fn iter_dup<'cur, Key, Value>(&'cur mut self) -> IterDup<'tx, 'cur, K, Key, Value>
     where
         Key: TableObject<'tx>,
         Value: TableObject<'tx>,
@@ -552,7 +561,7 @@ where
     /// database. Each item will be returned as an iterator of its duplicates.
     pub fn iter_dup_start<'cur, Key, Value>(
         &'cur mut self,
-    ) -> ReadResult<IterDup<'tx, 'cur, K, A, Key, Value>>
+    ) -> ReadResult<IterDup<'tx, 'cur, K, Key, Value>>
     where
         'tx: 'cur,
         Key: TableObject<'tx>,
@@ -570,7 +579,7 @@ where
     pub fn iter_dup_from<'cur, Key, Value>(
         &'cur mut self,
         key: &[u8],
-    ) -> ReadResult<IterDup<'tx, 'cur, K, A, Key, Value>>
+    ) -> ReadResult<IterDup<'tx, 'cur, K, Key, Value>>
     where
         'tx: 'cur,
         Key: TableObject<'tx>,
@@ -588,7 +597,7 @@ where
     pub fn iter_dup_of<'cur, Key, Value>(
         &'cur mut self,
         key: &[u8],
-    ) -> ReadResult<IterDupVals<'tx, 'cur, K, A, Key, Value>>
+    ) -> ReadResult<IterDupVals<'tx, 'cur, K, Key, Value>>
     where
         'tx: 'cur,
         Key: TableObject<'tx> + PartialEq,
@@ -602,10 +611,7 @@ where
     }
 }
 
-impl<'tx, A> Cursor<'tx, RW, A>
-where
-    A: TxPtrAccess,
-{
+impl<'tx, K: TransactionKind + WriteMarker> Cursor<'tx, K> {
     /// Puts a key/data pair into the database. The cursor will be positioned at
     /// the new data item, or on failure usually near it.
     pub fn put(&mut self, key: &[u8], data: &[u8], flags: WriteFlags) -> MdbxResult<()> {
@@ -740,30 +746,27 @@ where
     }
 }
 
-impl<'tx, K, A> Clone for Cursor<'tx, K, A>
+impl<'tx, K> Clone for Cursor<'tx, K>
 where
     K: TransactionKind,
-    A: TxPtrAccess,
 {
     fn clone(&self) -> Self {
         self.access.with_txn_ptr(|_| Self::new_at_position(self).unwrap()).unwrap()
     }
 }
 
-impl<'tx, K, A> fmt::Debug for Cursor<'tx, K, A>
+impl<'tx, K> fmt::Debug for Cursor<'tx, K>
 where
     K: TransactionKind,
-    A: TxPtrAccess,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Cursor").finish_non_exhaustive()
     }
 }
 
-impl<'tx, K, A> Drop for Cursor<'tx, K, A>
+impl<'tx, K> Drop for Cursor<'tx, K>
 where
     K: TransactionKind,
-    A: TxPtrAccess,
 {
     fn drop(&mut self) {
         // MDBX cursors MUST be closed. Failure to do so is a memory leak.
@@ -785,27 +788,5 @@ const fn slice_to_val(slice: Option<&[u8]>) -> ffi::MDBX_val {
     }
 }
 
-unsafe impl<'tx, K, A> Send for Cursor<'tx, K, A>
-where
-    K: TransactionKind,
-    A: TxPtrAccess + Sync,
-{
-}
-unsafe impl<'tx, K, A> Sync for Cursor<'tx, K, A>
-where
-    K: TransactionKind,
-    A: TxPtrAccess + Sync,
-{
-}
-
-/// A read-only cursor for a synchronized transaction.
-pub type RoCursorSync<'tx> = Cursor<'tx, crate::RO, crate::tx::PtrSyncInner<crate::RO>>;
-
-/// A read-write cursor for a synchronized transaction.
-pub type RwCursorSync<'tx> = Cursor<'tx, crate::RW, crate::tx::PtrSyncInner<crate::RW>>;
-
-/// A read-only cursor for an unsynchronized transaction.
-pub type RoCursorUnsync<'tx> = Cursor<'tx, crate::RO, crate::tx::RoGuard>;
-
-/// A read-write cursor for an unsynchronized transaction.
-pub type RwCursorUnsync<'tx> = Cursor<'tx, crate::RW, crate::tx::RwUnsync>;
+unsafe impl<'tx, K> Send for Cursor<'tx, K> where K: TransactionKind {}
+unsafe impl<'tx, K> Sync for Cursor<'tx, K> where K: TransactionKind {}

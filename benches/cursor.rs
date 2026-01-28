@@ -2,7 +2,7 @@
 mod utils;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use signet_libmdbx::{Cursor, ObjectLength, ReadResult, TransactionKind, ffi::*, tx::TxPtrAccess};
+use signet_libmdbx::{Cursor, ObjectLength, ReadResult, TransactionKind, ffi::*};
 use std::{hint::black_box, ptr};
 use utils::*;
 
@@ -34,9 +34,7 @@ fn bench_get_seq_iter(c: &mut Criterion) {
                 count += 1;
             }
 
-            fn iterate<K: TransactionKind, A: TxPtrAccess>(
-                cursor: &mut Cursor<K, A>,
-            ) -> ReadResult<()> {
+            fn iterate<K: TransactionKind>(cursor: &mut Cursor<K>) -> ReadResult<()> {
                 let mut i = 0;
                 for result in cursor.iter::<ObjectLength, ObjectLength>() {
                     let (key_len, data_len) = result?;
@@ -107,7 +105,7 @@ fn bench_get_seq_for_loop(c: &mut Criterion) {
 fn bench_get_seq_iter_single_thread(c: &mut Criterion) {
     let n = 100;
     let (_dir, env) = setup_bench_db(n);
-    let mut txn = create_ro_unsync(&env);
+    let txn = create_ro_unsync(&env);
     let db = txn.open_db(None).unwrap();
     // Note: setup_bench_db creates a named database which adds metadata to the
     // main database, so actual item count is n + 1
@@ -131,9 +129,7 @@ fn bench_get_seq_iter_single_thread(c: &mut Criterion) {
                 count += 1;
             }
 
-            fn iterate<K: TransactionKind, A: TxPtrAccess>(
-                cursor: &mut Cursor<K, A>,
-            ) -> ReadResult<()> {
+            fn iterate<K: TransactionKind>(cursor: &mut Cursor<K>) -> ReadResult<()> {
                 let mut i = 0;
                 for result in cursor.iter::<ObjectLength, ObjectLength>() {
                     let (key_len, data_len) = result?;
@@ -154,7 +150,7 @@ fn bench_get_seq_iter_single_thread(c: &mut Criterion) {
 fn bench_get_seq_cursor_single_thread(c: &mut Criterion) {
     let n = 100;
     let (_dir, env) = setup_bench_db(n);
-    let mut txn = create_ro_unsync(&env);
+    let txn = create_ro_unsync(&env);
     let db = txn.open_db(None).unwrap();
     // Note: setup_bench_db creates a named database which adds metadata to the
     // main database, so actual item count is n + 1
@@ -177,7 +173,7 @@ fn bench_get_seq_cursor_single_thread(c: &mut Criterion) {
 fn bench_get_seq_for_loop_single_thread(c: &mut Criterion) {
     let n = 100;
     let (_dir, env) = setup_bench_db(n);
-    let mut txn = create_ro_unsync(&env);
+    let txn = create_ro_unsync(&env);
     let db = txn.open_db(None).unwrap();
     // Note: setup_bench_db creates a named database which adds metadata to the
     // main database, so actual item count is n + 1
@@ -205,9 +201,6 @@ fn bench_get_seq_raw(c: &mut Criterion) {
     let n = 100;
     let (_dir, env) = setup_bench_db(n);
 
-    let dbi = create_ro_sync(&env).open_db(None).unwrap().dbi();
-    let txn = create_ro_sync(&env);
-
     let mut key = MDBX_val { iov_len: 0, iov_base: ptr::null_mut() };
     let mut data = MDBX_val { iov_len: 0, iov_base: ptr::null_mut() };
     let mut cursor: *mut MDBX_cursor = ptr::null_mut();
@@ -216,23 +209,36 @@ fn bench_get_seq_raw(c: &mut Criterion) {
     // main database, so actual item count is n + 1
     let actual_items = n + 1;
 
+    let txn = unsafe {
+        let mut txn: *mut MDBX_txn = ptr::null_mut();
+        env.with_raw_env_ptr(|env_ptr| {
+            txn = create_ro_raw(env_ptr);
+        });
+        txn
+    };
+
+    let mut dbi: MDBX_dbi = 0;
+    unsafe {
+        match mdbx_dbi_open(txn, ptr::null(), 0, &mut dbi) {
+            MDBX_SUCCESS | MDBX_RESULT_TRUE => {}
+            err => panic!("mdbx_dbi_open failed: {}", err),
+        }
+    };
+
     c.bench_function("cursor::traverse::raw", |b| {
         b.iter(|| unsafe {
-            txn.txn_execute(|txn| {
-                mdbx_cursor_open(txn, dbi, &raw mut cursor);
-                let mut i = 0;
-                let mut count = 0u32;
+            mdbx_cursor_open(txn, dbi, &raw mut cursor);
+            let mut i = 0;
+            let mut count = 0u32;
 
-                while mdbx_cursor_get(cursor, &raw mut key, &raw mut data, MDBX_NEXT) == 0 {
-                    i += key.iov_len + data.iov_len;
-                    count += 1;
-                }
+            while mdbx_cursor_get(cursor, &raw mut key, &raw mut data, MDBX_NEXT) == 0 {
+                i += key.iov_len + data.iov_len;
+                count += 1;
+            }
 
-                black_box(i);
-                assert_eq!(count, actual_items);
-                mdbx_cursor_close(cursor);
-            })
-            .unwrap();
+            black_box(i);
+            assert_eq!(count, actual_items);
+            mdbx_cursor_close(cursor);
         })
     });
 }

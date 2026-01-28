@@ -34,13 +34,13 @@
 //!         .open(Path::new("/tmp/my_database"))?;
 //!
 //!     // Write data in a read-write transaction
-//!     let txn = env.begin_rw_txn()?;
+//!     let txn = env.begin_rw_sync()?;
 //!     let db = txn.create_db(None, DatabaseFlags::empty())?;
 //!     txn.put(db, b"hello", b"world", WriteFlags::empty())?;
 //!     txn.commit()?;
 //!
 //!     // Read data in a read-only transaction
-//!     let txn = env.begin_ro_txn()?;
+//!     let txn = env.begin_ro_sync()?;
 //!     let db = txn.open_db(None)?;
 //!     let value: Option<Vec<u8>> = txn.get(db.dbi(), b"hello").expect("read failed");
 //!     assert_eq!(value.as_deref(), Some(b"world".as_slice()));
@@ -158,10 +158,6 @@ pub extern crate signet_mdbx_sys as ffi;
 
 mod codec;
 pub use codec::{ObjectLength, TableObject, TableObjectOwned};
-
-#[cfg(feature = "read-tx-timeouts")]
-pub use crate::sys::read_transactions::MaxReadTransactionDuration;
-
 mod error;
 pub use error::{MdbxError, MdbxResult, ReadError, ReadResult};
 
@@ -172,7 +168,9 @@ pub mod sys;
 pub use sys::{Environment, EnvironmentBuilder, Geometry, Info, Stat};
 
 pub mod tx;
-pub use tx::{CommitLatency, Cursor, Database, RO, RW, TransactionKind, TxSync, TxUnsync};
+pub use tx::{
+    CommitLatency, Cursor, Database, Ro, RoSync, Rw, RwSync, TransactionKind, TxSync, TxUnsync,
+};
 
 #[cfg(test)]
 mod test {
@@ -200,7 +198,7 @@ mod test {
         for height in 0..1000 {
             let mut value = [0u8; 8];
             LittleEndian::write_u64(&mut value, height);
-            let tx = env.begin_rw_txn().expect("begin_rw_txn");
+            let tx = env.begin_rw_sync().expect("begin_rw_sync");
             let index = tx.create_db(None, DatabaseFlags::DUP_SORT).expect("open index db");
             tx.put(index, HEIGHT_KEY, value, WriteFlags::empty()).expect("tx.put");
             tx.commit().expect("tx.commit");

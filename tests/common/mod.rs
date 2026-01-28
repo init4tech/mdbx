@@ -5,94 +5,93 @@
 //! functions that work with either variant.
 #![allow(missing_docs, dead_code)]
 use signet_libmdbx::{
-    Cursor, Database, DatabaseFlags, Environment, MdbxResult, RO, RW, ReadResult, Stat,
-    TableObject, TxSync, WriteFlags, ffi,
-    tx::{PtrSyncInner, RoGuard, RwUnsync, TxPtrAccess, unsync},
+    Cursor, Database, DatabaseFlags, Environment, MdbxResult, ReadResult, Ro, RoSync, Rw, RwSync,
+    Stat, TableObject, TransactionKind, TxSync, TxUnsync, WriteFlags, ffi,
+    tx::{RoTxSync, RoTxUnsync, RwTxSync, RwTxUnsync, WriteMarker},
 };
 
 /// Trait for read-write transaction operations used in tests.
 pub trait TestRwTxn: Sized {
-    /// The cursor access type for this transaction.
-    type CursorAccess: TxPtrAccess;
+    /// The kind
+    type Kind: TransactionKind + WriteMarker;
 
-    fn create_db(&mut self, name: Option<&str>, flags: DatabaseFlags) -> MdbxResult<Database>;
-    fn open_db(&mut self, name: Option<&str>) -> MdbxResult<Database>;
+    fn create_db(&self, name: Option<&str>, flags: DatabaseFlags) -> MdbxResult<Database>;
+    fn open_db(&self, name: Option<&str>) -> MdbxResult<Database>;
     fn get<'a, T: TableObject<'a>>(
-        &'a mut self,
+        &'a self,
         dbi: ffi::MDBX_dbi,
         key: &[u8],
     ) -> ReadResult<Option<T>>;
-    fn put(&mut self, db: Database, key: &[u8], data: &[u8], flags: WriteFlags) -> MdbxResult<()>;
-    fn append(&mut self, db: Database, key: &[u8], data: &[u8]) -> MdbxResult<()>;
-    fn append_dup(&mut self, db: Database, key: &[u8], data: &[u8]) -> MdbxResult<()>;
-    fn del(&mut self, db: Database, key: &[u8], data: Option<&[u8]>) -> MdbxResult<bool>;
-    fn clear_db(&mut self, db: Database) -> MdbxResult<()>;
+    fn put(&self, db: Database, key: &[u8], data: &[u8], flags: WriteFlags) -> MdbxResult<()>;
+    fn append(&self, db: Database, key: &[u8], data: &[u8]) -> MdbxResult<()>;
+    fn append_dup(&self, db: Database, key: &[u8], data: &[u8]) -> MdbxResult<()>;
+    fn del(&self, db: Database, key: &[u8], data: Option<&[u8]>) -> MdbxResult<bool>;
+    fn clear_db(&self, db: Database) -> MdbxResult<()>;
     fn commit(self) -> MdbxResult<()>;
-    fn cursor(&self, db: Database) -> MdbxResult<Cursor<'_, RW, Self::CursorAccess>>;
-    fn db_stat(&mut self, dbi: ffi::MDBX_dbi) -> MdbxResult<Stat>;
+    fn cursor(&self, db: Database) -> MdbxResult<Cursor<'_, Self::Kind>>;
+    fn db_stat(&self, dbi: ffi::MDBX_dbi) -> MdbxResult<Stat>;
 
-    /// # Safety
+    /// # Safety_by_dbi
     /// Caller must close all other Database and Cursor instances pointing to
     /// this dbi before calling.
-    unsafe fn drop_db(&mut self, db: Database) -> MdbxResult<()>;
+    unsafe fn drop_db(&self, db: Database) -> MdbxResult<()>;
 }
 
 /// Trait for read-only transaction operations used in tests.
 pub trait TestRoTxn: Sized {
-    /// The cursor access type for this transaction.
-    type CursorAccess: TxPtrAccess;
+    type Kind: TransactionKind;
 
-    fn open_db(&mut self, name: Option<&str>) -> MdbxResult<Database>;
+    fn open_db(&self, name: Option<&str>) -> MdbxResult<Database>;
     fn get<'a, T: TableObject<'a>>(
-        &'a mut self,
+        &'a self,
         dbi: ffi::MDBX_dbi,
         key: &[u8],
     ) -> ReadResult<Option<T>>;
     fn commit(self) -> MdbxResult<()>;
-    fn cursor(&self, db: Database) -> MdbxResult<Cursor<'_, RO, Self::CursorAccess>>;
-    fn db_stat(&mut self, dbi: ffi::MDBX_dbi) -> MdbxResult<Stat>;
+    fn cursor(&self, db: Database) -> MdbxResult<Cursor<'_, Self::Kind>>;
+    fn db_stat(&self, dbi: ffi::MDBX_dbi) -> MdbxResult<Stat>;
 }
 
-// =============================================================================
+// =============================================================================_by_dbi
 // V1 Transaction implementations
 // =============================================================================
 
-impl TestRwTxn for TxSync<RW> {
-    type CursorAccess = PtrSyncInner<RW>;
+impl TestRwTxn for RwTxSync {
+    type Kind = RwSync;
 
-    fn create_db(&mut self, name: Option<&str>, flags: DatabaseFlags) -> MdbxResult<Database> {
+    fn create_db(&self, name: Option<&str>, flags: DatabaseFlags) -> MdbxResult<Database> {
         TxSync::create_db(self, name, flags)
     }
 
-    fn open_db(&mut self, name: Option<&str>) -> MdbxResult<Database> {
+    fn open_db(&self, name: Option<&str>) -> MdbxResult<Database> {
         TxSync::open_db(self, name)
     }
 
     fn get<'a, T: TableObject<'a>>(
-        &'a mut self,
+        &'a self,
         dbi: ffi::MDBX_dbi,
         key: &[u8],
     ) -> ReadResult<Option<T>> {
         TxSync::get(self, dbi, key)
     }
 
-    fn put(&mut self, db: Database, key: &[u8], data: &[u8], flags: WriteFlags) -> MdbxResult<()> {
+    fn put(&self, db: Database, key: &[u8], data: &[u8], flags: WriteFlags) -> MdbxResult<()> {
         TxSync::put(self, db, key, data, flags)
     }
 
-    fn append(&mut self, db: Database, key: &[u8], data: &[u8]) -> MdbxResult<()> {
+    fn append(&self, db: Database, key: &[u8], data: &[u8]) -> MdbxResult<()> {
         TxSync::append(self, db, key, data)
     }
 
-    fn append_dup(&mut self, db: Database, key: &[u8], data: &[u8]) -> MdbxResult<()> {
+    fn append_dup(&self, db: Database, key: &[u8], data: &[u8]) -> MdbxResult<()> {
         TxSync::append_dup(self, db, key, data)
     }
 
-    fn del(&mut self, db: Database, key: &[u8], data: Option<&[u8]>) -> MdbxResult<bool> {
+    fn del(&self, db: Database, key: &[u8], data: Option<&[u8]>) -> MdbxResult<bool> {
         TxSync::del(self, db, key, data)
     }
 
-    fn clear_db(&mut self, db: Database) -> MdbxResult<()> {
+    fn clear_db(&self, db: Database) -> MdbxResult<()> {
         TxSync::clear_db(self, db)
     }
 
@@ -100,29 +99,29 @@ impl TestRwTxn for TxSync<RW> {
         TxSync::commit(self).map(|_| ())
     }
 
-    fn cursor(&self, db: Database) -> MdbxResult<Cursor<'_, RW, Self::CursorAccess>> {
+    fn cursor(&self, db: Database) -> MdbxResult<Cursor<'_, RwSync>> {
         TxSync::cursor(self, db)
     }
 
-    fn db_stat(&mut self, dbi: ffi::MDBX_dbi) -> MdbxResult<Stat> {
-        TxSync::db_stat(self, dbi)
+    fn db_stat(&self, dbi: ffi::MDBX_dbi) -> MdbxResult<Stat> {
+        TxSync::db_stat_by_dbi(self, dbi)
     }
 
-    unsafe fn drop_db(&mut self, db: Database) -> MdbxResult<()> {
+    unsafe fn drop_db(&self, db: Database) -> MdbxResult<()> {
         // SAFETY: Caller ensures no other references to dbi exist.
         unsafe { TxSync::drop_db(self, db) }
     }
 }
 
-impl TestRoTxn for TxSync<RO> {
-    type CursorAccess = PtrSyncInner<RO>;
+impl TestRoTxn for RoTxSync {
+    type Kind = RoSync;
 
-    fn open_db(&mut self, name: Option<&str>) -> MdbxResult<Database> {
+    fn open_db(&self, name: Option<&str>) -> MdbxResult<Database> {
         TxSync::open_db(self, name)
     }
 
     fn get<'a, T: TableObject<'a>>(
-        &'a mut self,
+        &'a self,
         dbi: ffi::MDBX_dbi,
         key: &[u8],
     ) -> ReadResult<Option<T>> {
@@ -133,12 +132,12 @@ impl TestRoTxn for TxSync<RO> {
         TxSync::commit(self).map(|_| ())
     }
 
-    fn cursor(&self, db: Database) -> MdbxResult<Cursor<'_, RO, Self::CursorAccess>> {
+    fn cursor(&self, db: Database) -> MdbxResult<Cursor<'_, Self::Kind>> {
         TxSync::cursor(self, db)
     }
 
-    fn db_stat(&mut self, dbi: ffi::MDBX_dbi) -> MdbxResult<Stat> {
-        TxSync::db_stat(self, dbi)
+    fn db_stat(&self, dbi: ffi::MDBX_dbi) -> MdbxResult<Stat> {
+        TxSync::db_stat_by_dbi(self, dbi)
     }
 }
 
@@ -146,88 +145,88 @@ impl TestRoTxn for TxSync<RO> {
 // V2 Transaction implementations
 // =============================================================================
 
-impl TestRwTxn for unsync::TxUnsync<RW> {
-    type CursorAccess = RwUnsync;
+impl TestRwTxn for RwTxUnsync {
+    type Kind = Rw;
 
-    fn create_db(&mut self, name: Option<&str>, flags: DatabaseFlags) -> MdbxResult<Database> {
-        unsync::TxUnsync::create_db(self, name, flags)
+    fn create_db(&self, name: Option<&str>, flags: DatabaseFlags) -> MdbxResult<Database> {
+        TxUnsync::create_db(self, name, flags)
     }
 
-    fn open_db(&mut self, name: Option<&str>) -> MdbxResult<Database> {
-        unsync::TxUnsync::open_db(self, name)
+    fn open_db(&self, name: Option<&str>) -> MdbxResult<Database> {
+        TxUnsync::open_db(self, name)
     }
 
     fn get<'a, T: TableObject<'a>>(
-        &'a mut self,
+        &'a self,
         dbi: ffi::MDBX_dbi,
         key: &[u8],
     ) -> ReadResult<Option<T>> {
-        unsync::TxUnsync::get(self, dbi, key)
+        TxUnsync::get(self, dbi, key)
     }
 
-    fn put(&mut self, db: Database, key: &[u8], data: &[u8], flags: WriteFlags) -> MdbxResult<()> {
-        unsync::TxUnsync::put(self, db, key, data, flags)
+    fn put(&self, db: Database, key: &[u8], data: &[u8], flags: WriteFlags) -> MdbxResult<()> {
+        TxUnsync::put(self, db, key, data, flags)
     }
 
-    fn append(&mut self, db: Database, key: &[u8], data: &[u8]) -> MdbxResult<()> {
-        unsync::TxUnsync::append(self, db, key, data)
+    fn append(&self, db: Database, key: &[u8], data: &[u8]) -> MdbxResult<()> {
+        TxUnsync::append(self, db, key, data)
     }
 
-    fn append_dup(&mut self, db: Database, key: &[u8], data: &[u8]) -> MdbxResult<()> {
-        unsync::TxUnsync::append_dup(self, db, key, data)
+    fn append_dup(&self, db: Database, key: &[u8], data: &[u8]) -> MdbxResult<()> {
+        TxUnsync::append_dup(self, db, key, data)
     }
 
-    fn del(&mut self, db: Database, key: &[u8], data: Option<&[u8]>) -> MdbxResult<bool> {
-        unsync::TxUnsync::del(self, db, key, data)
+    fn del(&self, db: Database, key: &[u8], data: Option<&[u8]>) -> MdbxResult<bool> {
+        TxUnsync::del(self, db, key, data)
     }
 
-    fn clear_db(&mut self, db: Database) -> MdbxResult<()> {
-        unsync::TxUnsync::clear_db(self, db)
+    fn clear_db(&self, db: Database) -> MdbxResult<()> {
+        TxUnsync::clear_db(self, db)
     }
 
     fn commit(self) -> MdbxResult<()> {
-        unsync::TxUnsync::commit(self)
+        TxUnsync::commit(self)
     }
 
-    fn cursor(&self, db: Database) -> MdbxResult<Cursor<'_, RW, Self::CursorAccess>> {
-        unsync::TxUnsync::cursor(self, db)
+    fn cursor(&self, db: Database) -> MdbxResult<Cursor<'_, Rw>> {
+        TxUnsync::cursor(self, db)
     }
 
-    fn db_stat(&mut self, dbi: ffi::MDBX_dbi) -> MdbxResult<Stat> {
-        unsync::TxUnsync::db_stat(self, dbi)
+    fn db_stat(&self, dbi: ffi::MDBX_dbi) -> MdbxResult<Stat> {
+        TxUnsync::db_stat_by_dbi(self, dbi)
     }
 
-    unsafe fn drop_db(&mut self, db: Database) -> MdbxResult<()> {
+    unsafe fn drop_db(&self, db: Database) -> MdbxResult<()> {
         // SAFETY: Caller ensures no other references to dbi exist.
-        unsafe { unsync::TxUnsync::drop_db(self, db) }
+        unsafe { TxUnsync::drop_db(self, db) }
     }
 }
 
-impl TestRoTxn for unsync::TxUnsync<RO> {
-    type CursorAccess = RoGuard;
+impl TestRoTxn for TxUnsync<Ro> {
+    type Kind = Ro;
 
-    fn open_db(&mut self, name: Option<&str>) -> MdbxResult<Database> {
-        unsync::TxUnsync::open_db(self, name)
+    fn open_db(&self, name: Option<&str>) -> MdbxResult<Database> {
+        TxUnsync::open_db(self, name)
     }
 
     fn get<'a, T: TableObject<'a>>(
-        &'a mut self,
+        &'a self,
         dbi: ffi::MDBX_dbi,
         key: &[u8],
     ) -> ReadResult<Option<T>> {
-        unsync::TxUnsync::get(self, dbi, key)
+        TxUnsync::get(self, dbi, key)
     }
 
     fn commit(self) -> MdbxResult<()> {
-        unsync::TxUnsync::commit(self)
+        TxUnsync::commit(self)
     }
 
-    fn cursor(&self, db: Database) -> MdbxResult<Cursor<'_, RO, Self::CursorAccess>> {
-        unsync::TxUnsync::cursor(self, db)
+    fn cursor(&self, db: Database) -> MdbxResult<Cursor<'_, Self::Kind>> {
+        TxUnsync::cursor(self, db)
     }
 
-    fn db_stat(&mut self, dbi: ffi::MDBX_dbi) -> MdbxResult<Stat> {
-        unsync::TxUnsync::db_stat(self, dbi)
+    fn db_stat(&self, dbi: ffi::MDBX_dbi) -> MdbxResult<Stat> {
+        TxUnsync::db_stat_by_dbi(self, dbi)
     }
 }
 
@@ -239,12 +238,12 @@ impl TestRoTxn for unsync::TxUnsync<RO> {
 pub struct V1Factory;
 
 impl V1Factory {
-    pub fn begin_rw(env: &Environment) -> MdbxResult<TxSync<RW>> {
-        env.begin_rw_txn()
+    pub fn begin_rw(env: &Environment) -> MdbxResult<RwTxSync> {
+        env.begin_rw_sync()
     }
 
-    pub fn begin_ro(env: &Environment) -> MdbxResult<TxSync<RO>> {
-        env.begin_ro_txn()
+    pub fn begin_ro(env: &Environment) -> MdbxResult<RoTxSync> {
+        env.begin_ro_sync()
     }
 }
 
@@ -252,11 +251,11 @@ impl V1Factory {
 pub struct V2Factory;
 
 impl V2Factory {
-    pub fn begin_rw(env: &Environment) -> MdbxResult<unsync::TxUnsync<RW>> {
+    pub fn begin_rw(env: &Environment) -> MdbxResult<RwTxUnsync> {
         env.begin_rw_unsync()
     }
 
-    pub fn begin_ro(env: &Environment) -> MdbxResult<unsync::TxUnsync<RO>> {
+    pub fn begin_ro(env: &Environment) -> MdbxResult<RoTxUnsync> {
         env.begin_ro_unsync()
     }
 }

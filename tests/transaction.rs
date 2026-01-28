@@ -24,14 +24,14 @@ fn test_put_get_del_impl<RwTx, RoTx>(
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
 
-    let mut txn = begin_rw(&env).unwrap();
+    let txn = begin_rw(&env).unwrap();
     let db = txn.open_db(None).unwrap();
     txn.put(db, b"key1", b"val1", WriteFlags::empty()).unwrap();
     txn.put(db, b"key2", b"val2", WriteFlags::empty()).unwrap();
     txn.put(db, b"key3", b"val3", WriteFlags::empty()).unwrap();
     txn.commit().unwrap();
 
-    let mut txn = begin_rw(&env).unwrap();
+    let txn = begin_rw(&env).unwrap();
     let db = txn.open_db(None).unwrap();
     assert_eq!(txn.get(db.dbi(), b"key1").unwrap(), Some(*b"val1"));
     assert_eq!(txn.get(db.dbi(), b"key2").unwrap(), Some(*b"val2"));
@@ -62,7 +62,7 @@ fn test_put_get_del_multi_impl<RwTx, RoTx>(
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
 
-    let mut txn = begin_rw(&env).unwrap();
+    let txn = begin_rw(&env).unwrap();
     let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
     txn.put(db, b"key1", b"val1", WriteFlags::empty()).unwrap();
     txn.put(db, b"key1", b"val2", WriteFlags::empty()).unwrap();
@@ -75,7 +75,7 @@ fn test_put_get_del_multi_impl<RwTx, RoTx>(
     txn.put(db, b"key3", b"val3", WriteFlags::empty()).unwrap();
     txn.commit().unwrap();
 
-    let mut txn = begin_rw(&env).unwrap();
+    let txn = begin_rw(&env).unwrap();
     let db = txn.open_db(None).unwrap();
     {
         let mut cur = txn.cursor(db).unwrap();
@@ -85,13 +85,13 @@ fn test_put_get_del_multi_impl<RwTx, RoTx>(
     }
     txn.commit().unwrap();
 
-    let mut txn = begin_rw(&env).unwrap();
+    let txn = begin_rw(&env).unwrap();
     let db = txn.open_db(None).unwrap();
     txn.del(db, b"key1", Some(b"val2")).unwrap();
     txn.del(db, b"key2", None).unwrap();
     txn.commit().unwrap();
 
-    let mut txn = begin_rw(&env).unwrap();
+    let txn = begin_rw(&env).unwrap();
     let db = txn.open_db(None).unwrap();
     {
         let mut cur = txn.cursor(db).unwrap();
@@ -125,13 +125,13 @@ fn test_put_get_del_empty_key_impl<RwTx, RoTx>(
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
 
-    let mut txn = begin_rw(&env).unwrap();
+    let txn = begin_rw(&env).unwrap();
     let db = txn.create_db(None, Default::default()).unwrap();
     txn.put(db, b"", b"hello", WriteFlags::empty()).unwrap();
     assert_eq!(txn.get(db.dbi(), b"").unwrap(), Some(*b"hello"));
     txn.commit().unwrap();
 
-    let mut txn = begin_rw(&env).unwrap();
+    let txn = begin_rw(&env).unwrap();
     let db = txn.open_db(None).unwrap();
     assert_eq!(txn.get(db.dbi(), b"").unwrap(), Some(*b"hello"));
     txn.put(db, b"", b"", WriteFlags::empty()).unwrap();
@@ -159,20 +159,20 @@ fn test_clear_db_impl<RwTx, RoTx>(
     let env = Environment::builder().open(dir.path()).unwrap();
 
     {
-        let mut txn = begin_rw(&env).unwrap();
+        let txn = begin_rw(&env).unwrap();
         let db = txn.open_db(None).unwrap();
         txn.put(db, b"key", b"val", WriteFlags::empty()).unwrap();
         txn.commit().unwrap();
     }
 
     {
-        let mut txn = begin_rw(&env).unwrap();
+        let txn = begin_rw(&env).unwrap();
         let db = txn.open_db(None).unwrap();
         txn.clear_db(db).unwrap();
         txn.commit().unwrap();
     }
 
-    let mut txn = begin_ro(&env).unwrap();
+    let txn = begin_ro(&env).unwrap();
     let db = txn.open_db(None).unwrap();
     assert_eq!(txn.get::<()>(db.dbi(), b"key").unwrap(), None);
 }
@@ -199,7 +199,7 @@ fn test_drop_db_impl<RwTx, RoTx>(
         let env = Environment::builder().set_max_dbs(2).open(dir.path()).unwrap();
 
         {
-            let mut txn = begin_rw(&env).unwrap();
+            let txn = begin_rw(&env).unwrap();
             let db = txn.create_db(Some("test"), DatabaseFlags::empty()).unwrap();
             txn.put(db, b"key", b"val", WriteFlags::empty()).unwrap();
             // Workaround for MDBX dbi drop issue
@@ -207,7 +207,7 @@ fn test_drop_db_impl<RwTx, RoTx>(
             txn.commit().unwrap();
         }
         {
-            let mut txn = begin_rw(&env).unwrap();
+            let txn = begin_rw(&env).unwrap();
             let db = txn.open_db(Some("test")).unwrap();
             unsafe {
                 txn.drop_db(db).unwrap();
@@ -219,7 +219,7 @@ fn test_drop_db_impl<RwTx, RoTx>(
 
     let env = Environment::builder().set_max_dbs(2).open(dir.path()).unwrap();
 
-    let mut txn = begin_ro(&env).unwrap();
+    let txn = begin_ro(&env).unwrap();
     txn.open_db(Some("canary")).unwrap();
     assert!(matches!(txn.open_db(Some("test")).unwrap_err(), MdbxError::NotFound));
 }
@@ -244,7 +244,7 @@ fn test_stat_impl<RwTx, RoTx>(
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
 
-    let mut txn = begin_rw(&env).unwrap();
+    let txn = begin_rw(&env).unwrap();
     let db = txn.create_db(None, DatabaseFlags::empty()).unwrap();
     txn.put(db, b"key1", b"val1", WriteFlags::empty()).unwrap();
     txn.put(db, b"key2", b"val2", WriteFlags::empty()).unwrap();
@@ -252,26 +252,26 @@ fn test_stat_impl<RwTx, RoTx>(
     txn.commit().unwrap();
 
     {
-        let mut txn = begin_ro(&env).unwrap();
+        let txn = begin_ro(&env).unwrap();
         let db = txn.open_db(None).unwrap();
         let stat = txn.db_stat(db.dbi()).unwrap();
         assert_eq!(stat.entries(), 3);
     }
 
-    let mut txn = begin_rw(&env).unwrap();
+    let txn = begin_rw(&env).unwrap();
     let db = txn.open_db(None).unwrap();
     txn.del(db, b"key1", None).unwrap();
     txn.del(db, b"key2", None).unwrap();
     txn.commit().unwrap();
 
     {
-        let mut txn = begin_ro(&env).unwrap();
+        let txn = begin_ro(&env).unwrap();
         let db = txn.open_db(None).unwrap();
         let stat = txn.db_stat(db.dbi()).unwrap();
         assert_eq!(stat.entries(), 1);
     }
 
-    let mut txn = begin_rw(&env).unwrap();
+    let txn = begin_rw(&env).unwrap();
     let db = txn.open_db(None).unwrap();
     txn.put(db, b"key4", b"val4", WriteFlags::empty()).unwrap();
     txn.put(db, b"key5", b"val5", WriteFlags::empty()).unwrap();
@@ -279,7 +279,7 @@ fn test_stat_impl<RwTx, RoTx>(
     txn.commit().unwrap();
 
     {
-        let mut txn = begin_ro(&env).unwrap();
+        let txn = begin_ro(&env).unwrap();
         let db = txn.open_db(None).unwrap();
         let stat = txn.db_stat(db.dbi()).unwrap();
         assert_eq!(stat.entries(), 4);
@@ -306,7 +306,7 @@ fn test_stat_dupsort_impl<RwTx, RoTx>(
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
 
-    let mut txn = begin_rw(&env).unwrap();
+    let txn = begin_rw(&env).unwrap();
     let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
     txn.put(db, b"key1", b"val1", WriteFlags::empty()).unwrap();
     txn.put(db, b"key1", b"val2", WriteFlags::empty()).unwrap();
@@ -320,26 +320,26 @@ fn test_stat_dupsort_impl<RwTx, RoTx>(
     txn.commit().unwrap();
 
     {
-        let mut txn = begin_ro(&env).unwrap();
+        let txn = begin_ro(&env).unwrap();
         let db = txn.open_db(None).unwrap();
         let stat = txn.db_stat(db.dbi()).unwrap();
         assert_eq!(stat.entries(), 9);
     }
 
-    let mut txn = begin_rw(&env).unwrap();
+    let txn = begin_rw(&env).unwrap();
     let db = txn.open_db(None).unwrap();
     txn.del(db, b"key1", Some(b"val2")).unwrap();
     txn.del(db, b"key2", None).unwrap();
     txn.commit().unwrap();
 
     {
-        let mut txn = begin_ro(&env).unwrap();
+        let txn = begin_ro(&env).unwrap();
         let db = txn.open_db(None).unwrap();
         let stat = txn.db_stat(db.dbi()).unwrap();
         assert_eq!(stat.entries(), 5);
     }
 
-    let mut txn = begin_rw(&env).unwrap();
+    let txn = begin_rw(&env).unwrap();
     let db = txn.open_db(None).unwrap();
     txn.put(db, b"key4", b"val1", WriteFlags::empty()).unwrap();
     txn.put(db, b"key4", b"val2", WriteFlags::empty()).unwrap();
@@ -347,7 +347,7 @@ fn test_stat_dupsort_impl<RwTx, RoTx>(
     txn.commit().unwrap();
 
     {
-        let mut txn = begin_ro(&env).unwrap();
+        let txn = begin_ro(&env).unwrap();
         let db = txn.open_db(None).unwrap();
         let stat = txn.db_stat(db.dbi()).unwrap();
         assert_eq!(stat.entries(), 8);
@@ -374,12 +374,12 @@ fn test_open_db_cached_returns_same_handle_impl<RwTx, RoTx>(
     let dir = tempdir().unwrap();
     let env = Environment::builder().set_max_dbs(2).open(dir.path()).unwrap();
 
-    let mut txn = begin_rw(&env).unwrap();
+    let txn = begin_rw(&env).unwrap();
     txn.create_db(Some("test"), DatabaseFlags::empty()).unwrap();
     txn.commit().unwrap();
 
     // Test that open_db_cached returns the same dbi for the same name
-    let mut txn = begin_ro(&env).unwrap();
+    let txn = begin_ro(&env).unwrap();
 
     let db1 = txn.open_db(None).unwrap();
     let db2 = txn.open_db(None).unwrap();
@@ -413,7 +413,7 @@ fn test_database_flags_getter_impl<RwTx, RoTx>(
     let dir = tempdir().unwrap();
     let env = Environment::builder().set_max_dbs(2).open(dir.path()).unwrap();
 
-    let mut txn = begin_rw(&env).unwrap();
+    let txn = begin_rw(&env).unwrap();
 
     // Create a database with DUP_SORT flag
     let db = txn.create_db(Some("dupsort"), DatabaseFlags::DUP_SORT).unwrap();
@@ -426,7 +426,7 @@ fn test_database_flags_getter_impl<RwTx, RoTx>(
     txn.commit().unwrap();
 
     // Verify flags persist after reopening
-    let mut txn = begin_ro(&env).unwrap();
+    let txn = begin_ro(&env).unwrap();
     let db = txn.open_db(Some("dupsort")).unwrap();
     assert!(db.flags().contains(DatabaseFlags::DUP_SORT));
 }
@@ -451,12 +451,12 @@ fn test_cached_db_has_correct_flags_impl<RwTx, RoTx>(
     let dir = tempdir().unwrap();
     let env = Environment::builder().set_max_dbs(2).open(dir.path()).unwrap();
 
-    let mut txn = begin_rw(&env).unwrap();
+    let txn = begin_rw(&env).unwrap();
     txn.create_db(Some("dupsort"), DatabaseFlags::DUP_SORT).unwrap();
     txn.commit().unwrap();
 
     // Test that cached open returns correct flags
-    let mut txn = begin_ro(&env).unwrap();
+    let txn = begin_ro(&env).unwrap();
 
     // First open - cache miss, goes through FFI
     let db1 = txn.open_db(Some("dupsort")).unwrap();
@@ -490,7 +490,7 @@ fn test_reserve_v1() {
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
 
-    let txn = env.begin_rw_txn().unwrap();
+    let txn = env.begin_rw_sync().unwrap();
     let db = txn.open_db(None).unwrap();
     {
         unsafe {
@@ -501,7 +501,7 @@ fn test_reserve_v1() {
     }
     txn.commit().unwrap();
 
-    let txn = env.begin_rw_txn().unwrap();
+    let txn = env.begin_rw_sync().unwrap();
     let db = txn.open_db(None).unwrap();
     assert_eq!(txn.get(db.dbi(), b"key1").unwrap(), Some(*b"val1"));
     assert_eq!(txn.get::<()>(db.dbi(), b"key").unwrap(), None);
@@ -516,7 +516,7 @@ fn test_reserve_v2() {
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
 
-    let mut txn = env.begin_rw_unsync().unwrap();
+    let txn = env.begin_rw_unsync().unwrap();
     let db = txn.open_db(None).unwrap();
     {
         unsafe {
@@ -527,7 +527,7 @@ fn test_reserve_v2() {
     }
     txn.commit().unwrap();
 
-    let mut txn = env.begin_rw_unsync().unwrap();
+    let txn = env.begin_rw_unsync().unwrap();
     let db = txn.open_db(None).unwrap();
     assert_eq!(txn.get(db.dbi(), b"key1").unwrap(), Some(*b"val1"));
     assert_eq!(txn.get::<()>(db.dbi(), b"key").unwrap(), None);
@@ -542,7 +542,7 @@ fn test_nested_txn() {
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
 
-    let mut txn = env.begin_rw_txn().unwrap();
+    let txn = env.begin_rw_sync().unwrap();
     let db = txn.open_db(None).unwrap();
     txn.put(db, b"key1", b"val1", WriteFlags::empty()).unwrap();
 
@@ -578,21 +578,21 @@ fn test_concurrent_readers_single_writer() {
 
         threads.push(thread::spawn(move || {
             {
-                let txn = reader_env.begin_ro_txn().unwrap();
+                let txn = reader_env.begin_ro_sync().unwrap();
                 let db = txn.open_db(None).unwrap();
                 assert_eq!(txn.get::<()>(db.dbi(), key).unwrap(), None);
             }
             reader_barrier.wait();
             reader_barrier.wait();
             {
-                let txn = reader_env.begin_ro_txn().unwrap();
+                let txn = reader_env.begin_ro_sync().unwrap();
                 let db = txn.open_db(None).unwrap();
                 txn.get::<[u8; 3]>(db.dbi(), key).unwrap().unwrap() == *val
             }
         }));
     }
 
-    let txn = env.begin_rw_txn().unwrap();
+    let txn = env.begin_rw_sync().unwrap();
     let db = txn.open_db(None).unwrap();
 
     barrier.wait();
@@ -620,7 +620,7 @@ fn test_concurrent_writers() {
         let writer_env = env.clone();
 
         threads.push(thread::spawn(move || {
-            let txn = writer_env.begin_rw_txn().unwrap();
+            let txn = writer_env.begin_rw_sync().unwrap();
             let db = txn.open_db(None).unwrap();
             txn.put(db, format!("{key}{i}"), format!("{val}{i}"), WriteFlags::empty()).unwrap();
             txn.commit().is_ok()
@@ -628,7 +628,7 @@ fn test_concurrent_writers() {
     }
     assert!(threads.into_iter().all(|b| b.join().unwrap()));
 
-    let txn = env.begin_ro_txn().unwrap();
+    let txn = env.begin_ro_sync().unwrap();
     let db = txn.open_db(None).unwrap();
 
     for i in 0..n {

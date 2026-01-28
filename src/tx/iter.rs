@@ -44,7 +44,7 @@
 //! # use signet_libmdbx::Environment;
 //! # use std::path::Path;
 //! # let env = Environment::builder().open(Path::new("/tmp/iter_example")).unwrap();
-//! let txn = env.begin_ro_txn().unwrap();
+//! let txn = env.begin_ro_sync().unwrap();
 //! let db = txn.open_db(None).unwrap();
 //! let mut cursor = txn.cursor(db).unwrap();
 //!
@@ -61,21 +61,37 @@ use crate::{
 };
 use std::{borrow::Cow, marker::PhantomData, ptr};
 
+/// A key-value iterator for a synchronized read-only transaction.
+pub type RoIterSync<'tx, 'cur, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> =
+    IterKeyVals<'tx, 'cur, crate::RoSync, Key, Value>;
+
+/// A key-value iterator for a synchronized read-write transaction.
+pub type RwIterSync<'tx, 'cur, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> =
+    IterKeyVals<'tx, 'cur, crate::RwSync, Key, Value>;
+
+/// A key-value iterator for an unsynchronized read-only transaction.
+pub type RoIterUnsync<'tx, 'cur, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> =
+    IterKeyVals<'tx, 'cur, crate::Ro, Key, Value>;
+
+/// A key-value iterator for an unsynchronized read-write transaction.
+pub type RwIterUnsync<'tx, 'cur, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> =
+    IterKeyVals<'tx, 'cur, crate::Rw, Key, Value>;
+
 /// Iterates over KV pairs in an MDBX database.
-pub type IterKeyVals<'tx, 'cur, K, A, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> =
-    Iter<'tx, 'cur, K, A, Key, Value, { ffi::MDBX_NEXT }>;
+pub type IterKeyVals<'tx, 'cur, K, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> =
+    Iter<'tx, 'cur, K, Key, Value, { ffi::MDBX_NEXT }>;
 
 /// An iterator over the key/value pairs in an MDBX `DUPSORT` with duplicate
 /// keys, yielding the first value for each key.
 ///
 /// See the [`Iter`] documentation for more details.
-pub type IterDupKeys<'tx, 'cur, K, A, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> =
-    Iter<'tx, 'cur, K, A, Key, Value, { ffi::MDBX_NEXT_NODUP }>;
+pub type IterDupKeys<'tx, 'cur, K, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> =
+    Iter<'tx, 'cur, K, Key, Value, { ffi::MDBX_NEXT_NODUP }>;
 
 /// An iterator over the key/value pairs in an MDBX `DUPSORT`, yielding each
 /// duplicate value for a specific key.
-pub type IterDupVals<'tx, 'cur, K, A, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> =
-    Iter<'tx, 'cur, K, A, Key, Value, { ffi::MDBX_NEXT_DUP }>;
+pub type IterDupVals<'tx, 'cur, K, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> =
+    Iter<'tx, 'cur, K, Key, Value, { ffi::MDBX_NEXT_DUP }>;
 
 /// An iterator over the key/value pairs in an MDBX database.
 ///
@@ -93,12 +109,11 @@ pub struct Iter<
     'tx,
     'cur,
     K: TransactionKind,
-    A: TxPtrAccess,
     Key = Cow<'tx, [u8]>,
     Value = Cow<'tx, [u8]>,
     const OP: u32 = { ffi::MDBX_NEXT },
 > {
-    cursor: Cow<'cur, Cursor<'tx, K, A>>,
+    cursor: Cow<'cur, Cursor<'tx, K>>,
     /// Pre-fetched value from cursor positioning, yielded before calling FFI.
     pending: Option<(Key, Value)>,
     /// When true, the iterator is exhausted and will always return `None`.
@@ -106,10 +121,9 @@ pub struct Iter<
     _marker: PhantomData<fn() -> (Key, Value)>,
 }
 
-impl<K, A, Key, Value, const OP: u32> core::fmt::Debug for Iter<'_, '_, K, A, Key, Value, OP>
+impl<K, Key, Value, const OP: u32> core::fmt::Debug for Iter<'_, '_, K, Key, Value, OP>
 where
     K: TransactionKind,
-    A: TxPtrAccess,
     Key: core::fmt::Debug,
     Value: core::fmt::Debug,
 {
@@ -118,62 +132,57 @@ where
     }
 }
 
-impl<'tx: 'cur, 'cur, K, A, Key, Value, const OP: u32> Iter<'tx, 'cur, K, A, Key, Value, OP>
+impl<'tx: 'cur, 'cur, K, Key, Value, const OP: u32> Iter<'tx, 'cur, K, Key, Value, OP>
 where
     K: TransactionKind,
-    A: TxPtrAccess,
 {
     /// Create a new iterator from the given cursor, starting at the given
     /// position.
-    pub(crate) fn new(cursor: Cow<'cur, Cursor<'tx, K, A>>) -> Self {
+    pub(crate) fn new(cursor: Cow<'cur, Cursor<'tx, K>>) -> Self {
         Iter { cursor, pending: None, exhausted: false, _marker: PhantomData }
     }
 
     /// Create a new iterator from a mutable reference to the given cursor,
-    pub(crate) fn from_ref(cursor: &'cur mut Cursor<'tx, K, A>) -> Self {
+    pub(crate) fn from_ref(cursor: &'cur mut Cursor<'tx, K>) -> Self {
         Self::new(Cow::Borrowed(cursor))
     }
 
     /// Create a new iterator that is already exhausted.
     ///
     /// Iteration will immediately return `None`.
-    pub(crate) fn new_end(cursor: Cow<'cur, Cursor<'tx, K, A>>) -> Self {
+    pub(crate) fn new_end(cursor: Cow<'cur, Cursor<'tx, K>>) -> Self {
         Iter { cursor, pending: None, exhausted: true, _marker: PhantomData }
     }
 
     /// Create a new, exhausted iterator from a mutable reference to the given
     /// cursor. This is usually used as a placeholder when no items are to be
     /// yielded.
-    pub(crate) fn end_from_ref(cursor: &'cur mut Cursor<'tx, K, A>) -> Self {
+    pub(crate) fn end_from_ref(cursor: &'cur mut Cursor<'tx, K>) -> Self {
         Self::new_end(Cow::Borrowed(cursor))
     }
 
     /// Create a new iterator from the given cursor, first yielding the
     /// provided key/value pair.
-    pub(crate) fn new_with(cursor: Cow<'cur, Cursor<'tx, K, A>>, first: (Key, Value)) -> Self {
+    pub(crate) fn new_with(cursor: Cow<'cur, Cursor<'tx, K>>, first: (Key, Value)) -> Self {
         Iter { cursor, pending: Some(first), exhausted: false, _marker: PhantomData }
     }
 
     /// Create a new iterator from a mutable reference to the given cursor,
     /// first yielding the provided key/value pair.
-    pub(crate) fn from_ref_with(cursor: &'cur mut Cursor<'tx, K, A>, first: (Key, Value)) -> Self {
+    pub(crate) fn from_ref_with(cursor: &'cur mut Cursor<'tx, K>, first: (Key, Value)) -> Self {
         Self::new_with(Cow::Borrowed(cursor), first)
     }
 
     /// Create a new iterator from an owned cursor, first yielding the
     /// provided key/value pair.
-    pub(crate) fn from_owned_with(cursor: Cursor<'tx, K, A>, first: (Key, Value)) -> Self
-    where
-        A: Sized,
-    {
+    pub(crate) fn from_owned_with(cursor: Cursor<'tx, K>, first: (Key, Value)) -> Self {
         Self::new_with(Cow::Owned(cursor), first)
     }
 }
 
-impl<K, A, Key, Value, const OP: u32> Iter<'_, '_, K, A, Key, Value, OP>
+impl<K, Key, Value, const OP: u32> Iter<'_, '_, K, Key, Value, OP>
 where
     K: TransactionKind,
-    A: TxPtrAccess,
     Key: TableObjectOwned,
     Value: TableObjectOwned,
 {
@@ -189,10 +198,9 @@ where
     }
 }
 
-impl<'tx: 'cur, 'cur, K, A, Key, Value, const OP: u32> Iter<'tx, 'cur, K, A, Key, Value, OP>
+impl<'tx: 'cur, 'cur, K, Key, Value, const OP: u32> Iter<'tx, 'cur, K, Key, Value, OP>
 where
     K: TransactionKind,
-    A: TxPtrAccess,
     Key: TableObject<'tx>,
     Value: TableObject<'tx>,
 {
@@ -240,10 +248,9 @@ where
     }
 }
 
-impl<K, A, Key, Value, const OP: u32> Iterator for Iter<'_, '_, K, A, Key, Value, OP>
+impl<K, Key, Value, const OP: u32> Iterator for Iter<'_, '_, K, Key, Value, OP>
 where
     K: TransactionKind,
-    A: TxPtrAccess,
     Key: TableObjectOwned,
     Value: TableObjectOwned,
 {
@@ -256,21 +263,13 @@ where
 
 /// An iterator over the key/value pairs in an MDBX database with duplicate
 /// keys.
-pub struct IterDup<
-    'tx,
-    'cur,
-    K: TransactionKind,
-    A: TxPtrAccess,
-    Key = Cow<'tx, [u8]>,
-    Value = Cow<'tx, [u8]>,
-> {
-    inner: IterDupKeys<'tx, 'cur, K, A, Key, Value>,
+pub struct IterDup<'tx, 'cur, K: TransactionKind, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> {
+    inner: IterDupKeys<'tx, 'cur, K, Key, Value>,
 }
 
-impl<'tx, 'cur, K, A, Key, Value> core::fmt::Debug for IterDup<'tx, 'cur, K, A, Key, Value>
+impl<'tx, 'cur, K, Key, Value> core::fmt::Debug for IterDup<'tx, 'cur, K, Key, Value>
 where
     K: TransactionKind,
-    A: TxPtrAccess,
     Key: core::fmt::Debug,
     Value: core::fmt::Debug,
 {
@@ -279,71 +278,63 @@ where
     }
 }
 
-impl<'tx, 'cur, K, A, Key, Value> IterDup<'tx, 'cur, K, A, Key, Value>
+impl<'tx, 'cur, K, Key, Value> IterDup<'tx, 'cur, K, Key, Value>
 where
     K: TransactionKind,
-    A: TxPtrAccess,
 {
     /// Create a new iterator from the given cursor, starting at the given
     /// position.
-    pub(crate) fn new(cursor: Cow<'cur, Cursor<'tx, K, A>>) -> Self {
+    pub(crate) fn new(cursor: Cow<'cur, Cursor<'tx, K>>) -> Self {
         IterDup { inner: IterDupKeys::new(cursor) }
     }
 
     /// Create a new iterator from a mutable reference to the given cursor,
-    pub(crate) fn from_ref(cursor: &'cur mut Cursor<'tx, K, A>) -> Self {
+    pub(crate) fn from_ref(cursor: &'cur mut Cursor<'tx, K>) -> Self {
         Self::new(Cow::Borrowed(cursor))
     }
 
     /// Create a new iterator from an owned cursor.
-    pub fn from_owned(cursor: Cursor<'tx, K, A>) -> Self
-    where
-        A: Sized,
-    {
+    pub fn from_owned(cursor: Cursor<'tx, K>) -> Self {
         Self::new(Cow::Owned(cursor))
     }
 
     /// Create a new iterator from the given cursor, the inner iterator will
     /// first yield the provided key/value pair.
-    pub(crate) fn new_with(cursor: Cow<'cur, Cursor<'tx, K, A>>, first: (Key, Value)) -> Self {
+    pub(crate) fn new_with(cursor: Cow<'cur, Cursor<'tx, K>>, first: (Key, Value)) -> Self {
         IterDup { inner: Iter::new_with(cursor, first) }
     }
 
     /// Create a new iterator from a mutable reference to the given cursor,
     /// first yielding the provided key/value pair.
-    pub fn from_ref_with(cursor: &'cur mut Cursor<'tx, K, A>, first: (Key, Value)) -> Self {
+    pub fn from_ref_with(cursor: &'cur mut Cursor<'tx, K>, first: (Key, Value)) -> Self {
         Self::new_with(Cow::Borrowed(cursor), first)
     }
 
     /// Create a new iterator from the given cursor, with no items to yield.
-    pub fn new_end(cursor: Cow<'cur, Cursor<'tx, K, A>>) -> Self {
+    pub fn new_end(cursor: Cow<'cur, Cursor<'tx, K>>) -> Self {
         IterDup { inner: Iter::new_end(cursor) }
     }
 
     /// Create a new iterator from a mutable reference to the given cursor, with
     /// no items to yield.
-    pub fn end_from_ref(cursor: &'cur mut Cursor<'tx, K, A>) -> Self {
+    pub fn end_from_ref(cursor: &'cur mut Cursor<'tx, K>) -> Self {
         Self::new_end(Cow::Borrowed(cursor))
     }
 
     /// Create a new iterator from an owned cursor, with no items to yield.
-    pub fn end_from_owned(cursor: Cursor<'tx, K, A>) -> Self
-    where
-        A: Sized,
-    {
+    pub fn end_from_owned(cursor: Cursor<'tx, K>) -> Self {
         Self::new_end(Cow::Owned(cursor))
     }
 }
 
-impl<'tx: 'cur, 'cur, K, A, Key, Value> IterDup<'tx, 'cur, K, A, Key, Value>
+impl<'tx: 'cur, 'cur, K, Key, Value> IterDup<'tx, 'cur, K, Key, Value>
 where
     K: TransactionKind,
-    A: TxPtrAccess + 'tx,
     Key: TableObject<'tx>,
     Value: TableObject<'tx>,
 {
     /// Borrow the next key/value pair from the iterator.
-    pub fn borrow_next(&mut self) -> ReadResult<Option<IterDupVals<'tx, 'cur, K, A, Key, Value>>> {
+    pub fn borrow_next(&mut self) -> ReadResult<Option<IterDupVals<'tx, 'cur, K, Key, Value>>> {
         // We want to use Cursor::new_at_position to create a new cursor,
         // but the kv pair may be borrowed from the inner cursor, so we need to
         // store the references first. This is just to avoid borrow checker
@@ -353,8 +344,7 @@ where
         // SAFETY: the access lives as long as self.inner.cursor, and the cursor op
         // we perform does not invalidate the data borrowed from the inner
         // cursor in borrow_next.
-        let access: *const A = self.inner.cursor.access();
-        let access = unsafe { access.as_ref().unwrap() };
+        let access = self.inner.cursor.access();
 
         // The next will be the FIRST KV pair for the NEXT key in the DUPSORT
         match self.inner.borrow_next()? {
@@ -378,45 +368,27 @@ where
     }
 }
 
-impl<'tx: 'cur, 'cur, K, A, Key, Value> IterDup<'tx, 'cur, K, A, Key, Value>
+impl<'tx: 'cur, 'cur, K, Key, Value> IterDup<'tx, 'cur, K, Key, Value>
 where
     K: TransactionKind,
-    A: TxPtrAccess + 'tx,
     Key: TableObjectOwned,
     Value: TableObjectOwned,
 {
     /// Own the next key/value pair from the iterator.
-    pub fn owned_next(&mut self) -> ReadResult<Option<IterDupVals<'tx, 'cur, K, A, Key, Value>>> {
+    pub fn owned_next(&mut self) -> ReadResult<Option<IterDupVals<'tx, 'cur, K, Key, Value>>> {
         self.borrow_next()
     }
 }
 
-impl<'tx: 'cur, 'cur, K, A, Key, Value> Iterator for IterDup<'tx, 'cur, K, A, Key, Value>
+impl<'tx: 'cur, 'cur, K, Key, Value> Iterator for IterDup<'tx, 'cur, K, Key, Value>
 where
     K: TransactionKind,
-    A: TxPtrAccess + 'tx,
     Key: TableObjectOwned,
     Value: TableObjectOwned,
 {
-    type Item = ReadResult<IterDupVals<'tx, 'cur, K, A, Key, Value>>;
+    type Item = ReadResult<IterDupVals<'tx, 'cur, K, Key, Value>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.owned_next().transpose()
     }
 }
-
-/// A key-value iterator for a synchronized read-only transaction.
-pub type RoIterSync<'tx, 'cur, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> =
-    IterKeyVals<'tx, 'cur, crate::RO, crate::tx::PtrSyncInner<crate::RO>, Key, Value>;
-
-/// A key-value iterator for a synchronized read-write transaction.
-pub type RwIterSync<'tx, 'cur, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> =
-    IterKeyVals<'tx, 'cur, crate::RW, crate::tx::PtrSyncInner<crate::RW>, Key, Value>;
-
-/// A key-value iterator for an unsynchronized read-only transaction.
-pub type RoIterUnsync<'tx, 'cur, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> =
-    IterKeyVals<'tx, 'cur, crate::RO, crate::tx::RoGuard, Key, Value>;
-
-/// A key-value iterator for an unsynchronized read-write transaction.
-pub type RwIterUnsync<'tx, 'cur, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> =
-    IterKeyVals<'tx, 'cur, crate::RW, crate::tx::RwUnsync, Key, Value>;

@@ -25,16 +25,16 @@ fn test_begin_txn() {
         // writable environment
         let env = Environment::builder().open(dir.path()).unwrap();
 
-        env.begin_rw_txn().unwrap();
-        env.begin_ro_txn().unwrap();
+        env.begin_rw_sync().unwrap();
+        env.begin_ro_sync().unwrap();
     }
 
     {
         // read-only environment
         let env = Environment::builder().set_flags(Mode::ReadOnly.into()).open(dir.path()).unwrap();
 
-        env.begin_rw_txn().unwrap_err();
-        env.begin_ro_txn().unwrap();
+        env.begin_rw_sync().unwrap_err();
+        env.begin_ro_sync().unwrap();
     }
 }
 
@@ -43,7 +43,7 @@ fn test_open_db() {
     let dir = tempdir().unwrap();
     let env = Environment::builder().set_max_dbs(1).open(dir.path()).unwrap();
 
-    let txn = env.begin_ro_txn().unwrap();
+    let txn = env.begin_ro_sync().unwrap();
     txn.open_db(None).unwrap();
     txn.open_db(Some("testdb")).unwrap_err();
 }
@@ -53,7 +53,7 @@ fn test_create_db() {
     let dir = tempdir().unwrap();
     let env = Environment::builder().set_max_dbs(11).open(dir.path()).unwrap();
 
-    let txn = env.begin_rw_txn().unwrap();
+    let txn = env.begin_rw_sync().unwrap();
     txn.open_db(Some("testdb")).unwrap_err();
     txn.create_db(Some("testdb"), DatabaseFlags::empty()).unwrap();
     txn.open_db(Some("testdb")).unwrap();
@@ -64,7 +64,7 @@ fn test_close_database() {
     let dir = tempdir().unwrap();
     let env = Environment::builder().set_max_dbs(10).open(dir.path()).unwrap();
 
-    let txn = env.begin_rw_txn().unwrap();
+    let txn = env.begin_rw_sync().unwrap();
     txn.create_db(Some("db"), DatabaseFlags::empty()).unwrap();
     txn.open_db(Some("db")).unwrap();
 }
@@ -99,7 +99,7 @@ fn test_stat() {
     for i in 0..64 {
         let mut value = [0u8; 8];
         LittleEndian::write_u64(&mut value, i);
-        let tx = env.begin_rw_txn().expect("begin_rw_txn");
+        let tx = env.begin_rw_sync().expect("begin_rw_sync");
         let db = tx.open_db(None).unwrap();
         tx.put(db, value, value, WriteFlags::default()).expect("tx.put");
         tx.commit().expect("tx.commit");
@@ -154,12 +154,12 @@ fn test_freelist() {
     for i in 0..64 {
         let mut value = [0u8; 8];
         LittleEndian::write_u64(&mut value, i);
-        let tx = env.begin_rw_txn().expect("begin_rw_txn");
+        let tx = env.begin_rw_sync().expect("begin_rw_sync");
         let db = tx.open_db(None).unwrap();
         tx.put(db, value, value, WriteFlags::default()).expect("tx.put");
         tx.commit().expect("tx.commit");
     }
-    let tx = env.begin_rw_txn().expect("begin_rw_txn");
+    let tx = env.begin_rw_sync().expect("begin_rw_sync");
     let db = tx.open_db(None).unwrap();
     tx.clear_db(db).expect("clear");
     tx.commit().expect("tx.commit");

@@ -6,7 +6,7 @@
 //! - [`TxUnsync`] - Single-threaded unsynchronized transaction
 //! - [`Cursor`] - Database cursor for navigating entries
 //! - [`Database`] - Handle to an opened database
-//! - [`RO`], [`RW`] - Transaction kind markers
+//! - [`Ro`], [`Rw`], [`RoSync`], [`RwSync`] - Transaction kind markers
 //! - [`CommitLatency`] - Commit timing information
 //!
 //! # Type Aliases
@@ -15,14 +15,15 @@
 //! - [`RoTxSync`], [`RwTxSync`] - Synchronized transactions
 //! - [`RoTxUnsync`], [`RwTxUnsync`] - Unsynchronized transactions
 //! - [`RoCursorSync`], [`RwCursorSync`] - Cursors for synchronized transactions
-//! - [`RoCursorUnsync`], [`RwCursorUnsync`] - Cursors for unsynchronized transactions
+//! - [`RoCursorUnsync`], [`RwCursorUnsync`] - Cursors for unsynchronized
+//!   transactions
 //!
 //! # Advanced: Writing Generic Code
 //!
-//! For users writing generic code over cursors or transactions, the
-//! [`TxPtrAccess`] trait is available. This trait abstracts over the different
-//! ways transaction pointers are stored and accessed.
-//!
+//! For users writing generic code over cursors or transactions, we recommend
+//! reviewing the [`TransactionKind`], [`WriterKind`], and [`SyncKind`] traits,
+//! as well as exploring the bounds on impl blocks for the various transaction
+//! and cursor types.
 
 mod assertions;
 
@@ -41,7 +42,7 @@ pub mod iter;
 pub use iter::{RoIterSync, RoIterUnsync, RwIterSync, RwIterUnsync};
 
 mod kind;
-pub use kind::{Ro, RoSync, Rw, RwSync, TransactionKind, WriteMarker};
+pub use kind::{Ro, RoSync, Rw, RwSync, SyncKind, TransactionKind, WriteMarker, WriterKind};
 
 mod lat;
 pub use lat::CommitLatency;
@@ -50,4 +51,4 @@ pub use lat::CommitLatency;
 pub mod ops;
 
 mod r#impl;
-pub use r#impl::{RoTxSync, RoTxUnsync, RwTxSync, RwTxUnsync, TxSync, TxUnsync};
+pub use r#impl::{RoTxSync, RoTxUnsync, RwTxSync, RwTxUnsync, Tx, TxSync, TxUnsync};

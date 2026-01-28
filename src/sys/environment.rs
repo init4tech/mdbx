@@ -775,9 +775,10 @@ impl EnvironmentBuilder {
     ///
     /// This defines the number of slots in the lock table that is used to
     /// track readers in the environment. The default is 126. Starting a
-    /// read-only transaction normally ties a lock table slot to the [`TxSync`]
-    /// or [`TxUnsync`] object until it or the [Environment] object is
-    /// destroyed.
+    /// read-only transaction normally ties a lock table slot to [`Tx`] object
+    /// until it or the [`Environment`] object is destroyed.
+    ///
+    /// [`Tx`]: crate::tx::Tx
     pub const fn set_max_readers(&mut self, max_readers: u64) -> &mut Self {
         self.max_readers = Some(max_readers);
         self
@@ -791,7 +792,10 @@ impl EnvironmentBuilder {
     ///
     /// Currently a moderate number of slots are cheap but a huge number gets
     /// expensive: 7-120 words per transaction, and every call to
-    /// [`TxSync::open_db()`] or [`TxSync::open_db_no_cache()`] does a linear
+    /// [`Tx::open_db()`] or [`Tx::open_db_no_cache()`] does a linear
+    ///
+    /// [`Tx::open_db()`]: crate::tx::Tx::open_db
+    /// [`Tx::open_db_no_cache()`]: crate::tx::Tx::open_db_no_cache
     /// search of the opened slots.
     pub const fn set_max_dbs(&mut self, v: usize) -> &mut Self {
         self.max_dbs = Some(v as u64);

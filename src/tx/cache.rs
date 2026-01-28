@@ -1,6 +1,18 @@
-//! Caches for [`Database`] info, used by the [`Tx`] type
+//! Caches for [`Database`] info, used by the [`TxSync`] and [`TxUnsync`] types.
 //!
-//! [`Tx`]: crate::tx::tx::Tx
+//! This module defines cache types for storing database handles within
+//! transactions. Caches improve performance by avoiding repeated lookups of
+//! database information.
+//!
+//! The primary caches are:
+//! - [`DbCache`]: A simple inline cache using `SmallVec` for efficient storage
+//!   of a small number of database handles. Used in unsynchronized
+//!   transactions via [`RefCell`].
+//! - [`SharedCache`]: A thread-safe cache using `Arc<RwLock<...>>` for
+//!   synchronized transactions.
+//!
+//! [`TxSync`]: crate::tx::TxSync
+//! [`TxUnsync`]: crate::tx::TxUnsync
 
 use crate::Database;
 use parking_lot::RwLock;

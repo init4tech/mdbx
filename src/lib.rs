@@ -10,7 +10,7 @@
 //! - Creating and managing memory-mapped database environments
 //! - Performing transactional read and write operations
 //! - Iterating over key-value pairs with cursors
-//! - Custom serialization via the [`TableObject`] trait
+//! - Custom deserialization via the [`TableObject`] trait
 //!
 //! # Quick Start
 //!
@@ -59,13 +59,17 @@
 //!       threads.
 //!     - Unsynchronized transactions (`TxUnsync`) offer better
 //!       performance for single-threaded use cases.
-//! - [`RO`] and [`RW`] - Marker types indicating read-only (`RO`) or
-//!   read-write (`RW`) transactions.
+//! - [`Ro`] and [`Rw`] - Marker types indicating read-only (`Ro`) or
+//!   read-write (`Rw`) transactions.
+//!     - These also exist in sync flavors: [`RoSync`] and [`RwSync`].
 //! - [`Database`] - A named or unnamed key-value store within an environment.
-//!   - Opened with [`TxSync::open_db()`] or [`TxUnsync::open_db()`].
-//!   - Created with [`TxSync::create_db()`] or [`TxUnsync::create_db()`].
+//!   - Accessed with [`Tx::open_db`].
+//!   - or created via [`Tx::create_db`].
 //! - [`Cursor`]: Enables iteration and positioned access within a database.
 //!   Created via [`TxSync::cursor()`] or [`TxUnsync::cursor()`].
+//!
+//! [`Tx::open_db`]: crate::tx::Tx::open_db
+//! [`Tx::create_db`]: crate::tx::Tx::create_db
 //!
 //! # Feature Flags
 //!

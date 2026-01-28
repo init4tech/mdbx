@@ -549,6 +549,7 @@ where
         self.commit_inner(ptr::null_mut())
     }
 
+    /// Commits the transaction, returning commit latency information.
     #[instrument(skip(self), parent = &self.meta.span)]
     pub fn commit_with_latency(self) -> MdbxResult<CommitLatency> {
         let mut latency = CommitLatency::new();
@@ -590,6 +591,7 @@ where
         self.commit_inner(ptr::null_mut())
     }
 
+    /// Commits the transaction, returning commit latency information.
     #[instrument(skip(self), parent = &self.meta.span)]
     pub fn commit_with_latency(self) -> MdbxResult<CommitLatency> {
         let mut latency = CommitLatency::new();

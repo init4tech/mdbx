@@ -39,13 +39,9 @@ pub struct RoSync;
 #[non_exhaustive]
 pub struct RwSync;
 
-/// Marker trait for transaction kinds with associated inner type.
+/// Marker trait for transaction kinds.
 ///
-/// The `Inner` associated type determines how the transaction pointer is
-/// stored:
-/// - For [`RO`]: Either `RoInner` (Arc/Weak) with feature `read-tx-timeouts`,
-///   or raw pointer without it
-/// - For [`RW`]: Always raw pointer (direct ownership)
+/// Composed of [`WriterKind`] and [`SyncKind`].
 pub trait TransactionKind: WriterKind + SyncKind {
     /// Construct a new transaction of this kind from the given environment.
     ///
@@ -82,7 +78,10 @@ pub trait TransactionKind: WriterKind + SyncKind {
 
 impl<T> TransactionKind for T where T: WriterKind + SyncKind {}
 
+/// Marker trait for synchronized transaction kinds. Describes
+/// both the synchronization property and associated types.
 pub trait SyncKind {
+    /// Whether this transaction kind is synchronized (thread-safe).
     const SYNC: bool = false;
 
     /// The inner storage type for the transaction pointer.
@@ -123,9 +122,12 @@ pub trait WriteMarker: private::Sealed {}
 impl WriteMarker for Rw {}
 impl WriteMarker for RwSync {}
 
+/// Marker trait for transaction writer kinds. Either read-only or read-write.
 pub trait WriterKind: private::Sealed + core::fmt::Debug + 'static {
+    /// Whether this transaction kind is read-only.
     const IS_READ_ONLY: bool = true;
 
+    /// MDBX flags to use when opening a transaction of this kind.
     const OPEN_FLAGS: MDBX_txn_flags_t =
         { if Self::IS_READ_ONLY { MDBX_TXN_RDONLY } else { MDBX_TXN_READWRITE } };
 }

@@ -48,6 +48,21 @@
 //!     Ok(())
 //! }
 //! ```
+//! # Imports
+//!
+//! For most use cases, import from the crate root:
+//! ```rust,ignore
+//! use signet_libmdbx::{Environment, DatabaseFlags, WriteFlags, Geometry, MdbxResult};
+//! ```
+//!
+//! Transaction and cursor types are returned from `Environment` and transaction
+//! methods - you rarely need to import them directly.
+//!
+//! For advanced usage, import from submodules:
+//! - [`tx`] - Transaction type aliases (`RoTxSync`, `RwTxUnsync`, etc.) and
+//!   cursor type aliases
+//! - [`tx::iter`] - Iterator types for cursor iteration
+//! - [`sys`] - Environment internals (`EnvironmentKind`, `PageSize`, etc.)
 //!
 //! # Key Concepts
 //!
@@ -70,16 +85,6 @@
 //!
 //! [`Tx::open_db`]: crate::tx::Tx::open_db
 //! [`Tx::create_db`]: crate::tx::Tx::create_db
-//!
-//! # Feature Flags
-//!
-//! - `return-borrowed`: When enabled, iterators return borrowed data
-//!   (`Cow::Borrowed`) whenever possible, avoiding allocations. This is faster
-//!   but the data may change if the transaction modifies it later, which could
-//!   trigger undefined behavior. When disabled (default), dirty pages in write
-//!   transactions trigger copies for safety.
-//! - `read-tx-timeouts`: Enables automatic timeout handling for read
-//!   transactions that block writers. Useful for detecting stuck readers.
 //!
 //! # Custom Zero-copy Deserialization with [`TableObject`]
 //!
@@ -128,23 +133,6 @@
 //! [libmdbx]: https://github.com/erthink/libmdbx
 //! [reth-libmdbx]: https://github.com/paradigmxyz/reth
 //! [lmdb-rs]: https://github.com/mozilla/lmdb-rs
-//!
-//! # Imports
-//!
-//! For most use cases, import from the crate root:
-//! ```rust,ignore
-//! use signet_libmdbx::{Environment, DatabaseFlags, WriteFlags, Geometry, MdbxResult};
-//! ```
-//!
-//! Transaction and cursor types are returned from `Environment` and transaction
-//! methods - you rarely need to import them directly.
-//!
-//! For advanced usage, import from submodules:
-//! - [`tx`] - Transaction type aliases (`RoTxSync`, `RwTxUnsync`, etc.) and
-//!   cursor type aliases
-//! - [`tx::iter`] - Iterator types for cursor iteration
-//! - [`sys`] - Environment internals (`EnvironmentKind`, `PageSize`, etc.)
-//!
 
 #![warn(
     missing_copy_implementations,

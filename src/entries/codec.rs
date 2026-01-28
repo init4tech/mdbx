@@ -29,9 +29,24 @@ pub trait TableObjectOwned: for<'de> TableObject<'de> {
     fn decode(data_val: &[u8]) -> ReadResult<Self> {
         <Self as TableObject<'_>>::decode_borrow(Cow::Borrowed(data_val))
     }
-}
 
-impl<T> TableObjectOwned for T where T: for<'de> TableObject<'de> {}
+    /// Decodes directly from MDBX_val without TxView wrapper.
+    ///
+    /// Used by owned iterators to avoid wrapper overhead. The default
+    /// implementation delegates to [`Self::decode`] via a slice.
+    ///
+    /// # Safety
+    ///
+    /// The data pointed to by `data_val` is only valid for the lifetime of
+    /// the transaction. The caller must ensure that `data_val` points to valid
+    /// MDBX data.
+    #[doc(hidden)]
+    #[inline(always)]
+    unsafe fn decode_val_owned(data_val: ffi::MDBX_val) -> ReadResult<Self> {
+        let s = unsafe { slice::from_raw_parts(data_val.iov_base as *const u8, data_val.iov_len) };
+        Self::decode(s)
+    }
+}
 
 /// Decodes values read from the database into Rust types.
 ///
@@ -195,6 +210,16 @@ impl TableObject<'_> for Vec<u8> {
     }
 }
 
+impl TableObjectOwned for Vec<u8> {
+    #[inline(always)]
+    unsafe fn decode_val_owned(data_val: ffi::MDBX_val) -> ReadResult<Self> {
+        // SAFETY: Caller ensures the tx is active, slice is valid.
+        // Direct slice copy without Cow intermediate.
+        let s = unsafe { slice::from_raw_parts(data_val.iov_base as *const u8, data_val.iov_len) };
+        Ok(s.to_vec())
+    }
+}
+
 impl<'a> TableObject<'a> for () {
     fn decode_borrow(_: Cow<'a, [u8]>) -> ReadResult<Self> {
         Ok(())
@@ -206,6 +231,13 @@ impl<'a> TableObject<'a> for () {
         _: ffi::MDBX_val,
     ) -> ReadResult<TxView<'a, A, Self>> {
         Ok(TxView::new((), access))
+    }
+}
+
+impl TableObjectOwned for () {
+    #[inline(always)]
+    unsafe fn decode_val_owned(_: ffi::MDBX_val) -> ReadResult<Self> {
+        Ok(())
     }
 }
 
@@ -225,6 +257,14 @@ impl TableObject<'_> for ObjectLength {
         data_val: ffi::MDBX_val,
     ) -> ReadResult<TxView<'a, A, Self>> {
         Ok(TxView::new(Self(data_val.iov_len), access))
+    }
+}
+
+impl TableObjectOwned for ObjectLength {
+    #[inline(always)]
+    unsafe fn decode_val_owned(data_val: ffi::MDBX_val) -> ReadResult<Self> {
+        // Just read the length field directly.
+        Ok(Self(data_val.iov_len))
     }
 }
 
@@ -259,5 +299,19 @@ impl<'a, const LEN: usize> TableObject<'a> for [u8; LEN] {
         let mut a = [0; LEN];
         a[..].copy_from_slice(s);
         Ok(TxView::new(a, access))
+    }
+}
+
+impl<const LEN: usize> TableObjectOwned for [u8; LEN] {
+    #[inline(always)]
+    unsafe fn decode_val_owned(data_val: ffi::MDBX_val) -> ReadResult<Self> {
+        // SAFETY: Caller ensures the tx is active, slice is valid.
+        if data_val.iov_len != LEN {
+            return Err(MdbxError::DecodeErrorLenDiff.into());
+        }
+        let s = unsafe { slice::from_raw_parts(data_val.iov_base as *const u8, data_val.iov_len) };
+        let mut a = [0; LEN];
+        a[..].copy_from_slice(s);
+        Ok(a)
     }
 }

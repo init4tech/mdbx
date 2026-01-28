@@ -188,16 +188,41 @@ where
     Key: TableObjectOwned,
     Value: TableObjectOwned,
 {
+    /// Execute the MDBX operation and decode directly to owned types.
+    ///
+    /// This bypasses `TxView` construction for better performance when
+    /// only owned values are needed.
+    fn execute_op_owned(&self) -> ReadResult<Option<(Key, Value)>> {
+        let mut key = ffi::MDBX_val { iov_len: 0, iov_base: ptr::null_mut() };
+        let mut data = ffi::MDBX_val { iov_len: 0, iov_base: ptr::null_mut() };
+
+        self.cursor.access().with_txn_ptr(|_| {
+            let res =
+                unsafe { ffi::mdbx_cursor_get(self.cursor.cursor(), &mut key, &mut data, OP) };
+
+            match res {
+                ffi::MDBX_SUCCESS => unsafe {
+                    let key = Key::decode_val_owned(key)?;
+                    let data = Value::decode_val_owned(data)?;
+                    Ok(Some((key, data)))
+                },
+                ffi::MDBX_NOTFOUND | ffi::MDBX_ENODATA | ffi::MDBX_RESULT_TRUE => Ok(None),
+                other => Err(MdbxError::from_err_code(other).into()),
+            }
+        })?
+    }
+
     /// Own the next key/value pair from the iterator.
     pub fn next_owned(&mut self) -> ReadResult<Option<(Key, Value)>> {
         if self.exhausted {
             return Ok(None);
         }
+
         if let Some((k, v)) = self.pending.take() {
             return Ok(Some((k.into_owned(), v.into_owned())));
         }
 
-        Ok(self.execute_op()?.map(|(k, v)| (k.into_owned(), v.into_owned())))
+        self.execute_op_owned()
     }
 }
 

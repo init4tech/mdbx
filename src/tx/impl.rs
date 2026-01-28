@@ -37,6 +37,20 @@ pub type RwTxSync = TxSync<RwSync>;
 /// An unsynchronized read-only transaction.
 pub type RoTxUnsync = TxUnsync<Ro>;
 
+// SAFETY:
+// - RoTxSync and RwTxSync use Arc<PtrSync> which is Send and Sync.
+// - K::Cache is ALWAYS Send
+// - TxMeta is ALWAYS Send
+// - Moving an RO transaction between threads is safe as long as no concurrent
+//   access occurs, which is guaranteed by being !Sync.
+unsafe impl Send for RoTxSync {}
+unsafe impl Send for RwTxSync {}
+unsafe impl Send for RoTxUnsync {}
+
+// // SAFETY: RoTxUnsync cannot be shared between threads, but can be moved.
+// // This satisfies MDBX's requirements for read-only transactions.
+// unsafe impl Send for RoTxUnsync {}
+
 /// An unsynchronized read-write transaction.
 pub type RwTxUnsync = TxUnsync<Rw>;
 
@@ -713,5 +727,18 @@ mod tests {
 
         assert_eq!(db1_a.dbi(), db1_b.dbi());
         assert_ne!(db1_a.dbi(), db2.dbi());
+    }
+
+    fn __compile_checks() {
+        fn assert_sync<T: Sync>() {}
+        assert_sync::<RoTxSync>();
+        assert_sync::<RwTxSync>();
+        assert_sync::<TxMeta>();
+
+        fn assert_send<T: Send>() {}
+        assert_send::<RoTxSync>();
+        assert_send::<RwTxSync>();
+        assert_send::<RoTxUnsync>();
+        assert_send::<TxMeta>();
     }
 }

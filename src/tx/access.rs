@@ -48,7 +48,7 @@ pub trait TxPtrAccess: fmt::Debug + sealed::Sealed {
     /// Get the transaction ID by making a call into the MDBX C API.
     fn tx_id(&self) -> Option<usize> {
         let mut id = 0;
-        let _ = self.with_txn_ptr(|ptr| {
+        self.with_txn_ptr(|ptr| {
             id = unsafe { ffi::mdbx_txn_id(ptr) as usize };
         });
         // 0 indicates the transaction is not valid

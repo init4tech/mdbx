@@ -89,7 +89,7 @@ pub trait SyncKind {
     type Access: TxPtrAccess;
 
     /// Cache type used for this transaction kind.
-    type Cache: Cache;
+    type Cache: Cache + Send;
 }
 
 impl SyncKind for RoSync {

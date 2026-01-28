@@ -767,7 +767,7 @@ where
         //
         // To be able to close a cursor of a timed out transaction, we need to
         // renew it first. Hence the usage of `with_txn_ptr_for_cleanup` here.
-        let _ = self.access.with_txn_ptr(|_| unsafe { ffi::mdbx_cursor_close(self.cursor) });
+        self.access.with_txn_ptr(|_| unsafe { ffi::mdbx_cursor_close(self.cursor) });
     }
 }
 

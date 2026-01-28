@@ -57,3 +57,7 @@ harness = false
 [[bench]]
 name = "transaction"
 harness = false
+
+[[bench]]
+name = "iter"
+harness = false

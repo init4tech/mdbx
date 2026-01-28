@@ -7,21 +7,20 @@ working, or if the notes become outdated.
 
 Rust bindings for libmdbx (MDBX database). Crate name: `signet-libmdbx`.
 
+## Crate Mandates
+
+- You MUST NOT expose raw pointers to MDBX types outside of unsafe modules.
+- You MUST maintain zero-copy semantics for read operations in all new
+  interfaces.
+- You MUST read and respect `SAFETY` comments throughout the codebase.
+- You MUST NOT introduce new dependencies without approval.
+
 ## MDBX Synchronization Model
 
 When making changes to this codebase you MUST remember and conform to the MDBX
 synchronization model for transactions and cursors. Access to raw pointers MUST
 be mediated via the `TxAccess` trait. The table below summarizes the
 transaction types and their access models.
-
-| Transaction Type | Thread Safety | Access Model                                                                                         | enforced by Rust type system?                                      |
-| ---------------- | ------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| Read-Only (RO)   | !Sync + Send  | Access MUST be totally ordered and non-concurrent                                                    | No                                                                 |
-| Read-Write (RW)  | !Sync + !Send | Access MUST be totally ordered, and non-concurrent. Only the creating thread may manage TX lifecycle | No                                                                 |
-| Transaction<K>   | Sync + Send   | Multi-threaded wrapper using Mutex and Arc to share a RO or RW transaction safely across threads     | Yes, via synchronization wrappers                                  |
-| TxUnsync<RO>     | !Sync + Send  | Single-threaded RO transaction without synchronization overhead                                      | Yes, via required &mut or & access                                 |
-| TxUnsync<RW>     | !Sync + !Send | Single-threaded RW transaction without synchronization overhead                                      | Yes, &self enforces via required ownership and !Send + !Sync bound |
-| Cursors          | [Inherited]   | Cursors borrow a Tx. The cursor CANNOT outlive the tx, and must reap its pointer on drop             | Yes, via lifetimes                                                 |
 
 ## Key Types
 
@@ -105,6 +104,7 @@ docker build -t mdbx-linux-tests . && docker run --rm mdbx-linux-tests
 ```
 
 This SHOULD be run alongside local tests and linting, especially for changes that:
+
 - Modify build configuration
 - Add new dependencies
 - Change platform-specific code

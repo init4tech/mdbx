@@ -130,7 +130,7 @@ impl Drop for PtrUnsync {
 /// This type is used internally to manage transaction access in the [`TxSync`]
 /// transaction API. Users typically don't interact with this type directly.
 ///
-/// [`TxSync`]: crate::tx::TxSync
+/// [`TxSync`]: crate::tx::aliases::TxSync
 #[derive(Debug)]
 pub struct PtrSync {
     /// Raw pointer to the MDBX transaction.

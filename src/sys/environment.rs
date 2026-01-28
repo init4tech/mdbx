@@ -3,7 +3,7 @@ use crate::{
     error::{MdbxError, MdbxResult, ReadResult, mdbx_result},
     flags::EnvironmentFlags,
     sys::txn_manager::{LifecycleHandle, RwSyncLifecycle},
-    tx::{RoTxSync, RoTxUnsync, RwTxSync, RwTxUnsync},
+    tx::aliases::{RoTxSync, RoTxUnsync, RwTxSync, RwTxUnsync},
 };
 use byteorder::{ByteOrder, NativeEndian};
 use mem::size_of;

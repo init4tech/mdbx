@@ -2,7 +2,7 @@
 mod common;
 use common::{TestRoTxn, TestRwTxn, V1Factory, V2Factory};
 use signet_libmdbx::{
-    Cursor, DatabaseFlags, Environment, MdbxError, MdbxResult, ObjectLength, ReadError, ReadResult,
+    Cursor, DatabaseFlags, Environment, MdbxError, MdbxResult, ObjectLength, ReadResult,
     TransactionKind, WriteFlags,
 };
 use std::{borrow::Cow, hint::black_box};
@@ -529,91 +529,9 @@ fn test_put_del_v2() {
     test_put_del_impl(V2Factory::begin_rw, V2Factory::begin_ro);
 }
 
-fn test_dup_sort_validation_on_non_dupsort_db_impl<RwTx, RoTx>(
-    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
-    _begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
-) where
-    RwTx: TestRwTxn,
-    RoTx: TestRoTxn,
-{
-    let dir = tempdir().unwrap();
-    let env = Environment::builder().open(dir.path()).unwrap();
-
-    let txn = begin_rw(&env).unwrap();
-    let db = txn.open_db(None).unwrap(); // Non-DUPSORT database
-    txn.put(db, b"key1", b"val1", WriteFlags::empty()).unwrap();
-
-    let mut cursor = txn.cursor(db).unwrap();
-    cursor.first::<(), ()>().unwrap(); // Position cursor
-
-    // These should return RequiresDupSort error
-    let err = cursor.first_dup::<()>().unwrap_err();
-    assert!(matches!(err, ReadError::Mdbx(MdbxError::RequiresDupSort)));
-
-    let err = cursor.last_dup::<()>().unwrap_err();
-    assert!(matches!(err, ReadError::Mdbx(MdbxError::RequiresDupSort)));
-
-    let err = cursor.next_dup::<(), ()>().unwrap_err();
-    assert!(matches!(err, ReadError::Mdbx(MdbxError::RequiresDupSort)));
-
-    let err = cursor.prev_dup::<(), ()>().unwrap_err();
-    assert!(matches!(err, ReadError::Mdbx(MdbxError::RequiresDupSort)));
-
-    let err = cursor.get_both::<()>(b"key1", b"val1").unwrap_err();
-    assert!(matches!(err, ReadError::Mdbx(MdbxError::RequiresDupSort)));
-
-    let err = cursor.get_both_range::<()>(b"key1", b"val").unwrap_err();
-    assert!(matches!(err, ReadError::Mdbx(MdbxError::RequiresDupSort)));
-}
-
-#[test]
-fn test_dup_sort_validation_on_non_dupsort_db_v1() {
-    test_dup_sort_validation_on_non_dupsort_db_impl(V1Factory::begin_rw, V1Factory::begin_ro);
-}
-
-#[test]
-fn test_dup_sort_validation_on_non_dupsort_db_v2() {
-    test_dup_sort_validation_on_non_dupsort_db_impl(V2Factory::begin_rw, V2Factory::begin_ro);
-}
-
-fn test_dup_fixed_validation_on_non_dupfixed_db_impl<RwTx, RoTx>(
-    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
-    _begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
-) where
-    RwTx: TestRwTxn,
-    RoTx: TestRoTxn,
-{
-    let dir = tempdir().unwrap();
-    let env = Environment::builder().open(dir.path()).unwrap();
-
-    let txn = begin_rw(&env).unwrap();
-    // Create DUPSORT but NOT DUPFIXED database
-    let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
-    txn.put(db, b"key1", b"val1", WriteFlags::empty()).unwrap();
-
-    let mut cursor = txn.cursor(db).unwrap();
-    cursor.first::<(), ()>().unwrap(); // Position cursor
-
-    // These should return RequiresDupFixed error
-    let err = cursor.get_multiple::<()>().unwrap_err();
-    assert!(matches!(err, ReadError::Mdbx(MdbxError::RequiresDupFixed)));
-
-    let err = cursor.next_multiple::<(), ()>().unwrap_err();
-    assert!(matches!(err, ReadError::Mdbx(MdbxError::RequiresDupFixed)));
-
-    let err = cursor.prev_multiple::<(), ()>().unwrap_err();
-    assert!(matches!(err, ReadError::Mdbx(MdbxError::RequiresDupFixed)));
-}
-
-#[test]
-fn test_dup_fixed_validation_on_non_dupfixed_db_v1() {
-    test_dup_fixed_validation_on_non_dupfixed_db_impl(V1Factory::begin_rw, V1Factory::begin_ro);
-}
-
-#[test]
-fn test_dup_fixed_validation_on_non_dupfixed_db_v2() {
-    test_dup_fixed_validation_on_non_dupfixed_db_impl(V2Factory::begin_rw, V2Factory::begin_ro);
-}
+// NOTE: DUP_SORT and DUP_FIXED validation tests have been moved to the debug-only
+// module below. In debug builds, these validations panic via debug_assert!
+// In release builds, the checks are skipped and MDBX will return errors.
 
 fn test_dup_sort_methods_work_on_dupsort_db_impl<RwTx, RoTx>(
     begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
@@ -936,31 +854,441 @@ fn test_append_dup_v2() {
     test_append_dup_impl(V2Factory::begin_rw, V2Factory::begin_ro);
 }
 
-fn test_append_dup_requires_dupsort_impl<RwTx>(begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>)
-where
+// NOTE: append_dup DUP_SORT validation tests have been moved to the debug-only
+// module below. In debug builds, these validations panic via debug_assert!
+// In release builds, the checks are skipped and MDBX will return errors.
+
+// =============================================================================
+// DUPFIXED Iterator Tests
+// =============================================================================
+
+fn test_iter_dupfixed_basic_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
     RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
 {
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
 
-    // Try append_dup on non-DUPSORT database
+    // Create DUPFIXED database with 4-byte values
     let txn = begin_rw(&env).unwrap();
-    let db = txn.open_db(None).unwrap(); // Non-DUPSORT database
+    let db = txn.create_db(None, DatabaseFlags::DUP_SORT | DatabaseFlags::DUP_FIXED).unwrap();
+
+    // Insert values for key1
+    txn.put(db, b"key1", &1u32.to_le_bytes(), WriteFlags::empty()).unwrap();
+    txn.put(db, b"key1", &2u32.to_le_bytes(), WriteFlags::empty()).unwrap();
+    txn.put(db, b"key1", &3u32.to_le_bytes(), WriteFlags::empty()).unwrap();
+
+    // Insert values for key2
+    txn.put(db, b"key2", &10u32.to_le_bytes(), WriteFlags::empty()).unwrap();
+    txn.put(db, b"key2", &20u32.to_le_bytes(), WriteFlags::empty()).unwrap();
+
+    txn.commit().unwrap();
+
+    // Read back using the iterator
+    let txn = begin_ro(&env).unwrap();
+    let db = txn.open_db(None).unwrap();
     let mut cursor = txn.cursor(db).unwrap();
 
-    // Should return RequiresDupSort error
-    let err = cursor.append_dup(b"key", b"value").unwrap_err();
-    assert!(matches!(err, MdbxError::RequiresDupSort));
+    let results: Vec<(Vec<u8>, [u8; 4])> =
+        cursor.iter_dupfixed_start::<Vec<u8>, 4>().unwrap().map(|r| r.unwrap()).collect();
+
+    assert_eq!(results.len(), 5);
+    assert_eq!(results[0], (b"key1".to_vec(), 1u32.to_le_bytes()));
+    assert_eq!(results[1], (b"key1".to_vec(), 2u32.to_le_bytes()));
+    assert_eq!(results[2], (b"key1".to_vec(), 3u32.to_le_bytes()));
+    assert_eq!(results[3], (b"key2".to_vec(), 10u32.to_le_bytes()));
+    assert_eq!(results[4], (b"key2".to_vec(), 20u32.to_le_bytes()));
 }
 
 #[test]
-fn test_append_dup_requires_dupsort_v1() {
-    test_append_dup_requires_dupsort_impl(V1Factory::begin_rw);
+fn test_iter_dupfixed_basic_v1() {
+    test_iter_dupfixed_basic_impl(V1Factory::begin_rw, V1Factory::begin_ro);
 }
 
 #[test]
-fn test_append_dup_requires_dupsort_v2() {
-    test_append_dup_requires_dupsort_impl(V2Factory::begin_rw);
+fn test_iter_dupfixed_basic_v2() {
+    test_iter_dupfixed_basic_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+fn test_iter_dupfixed_from_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
+    let dir = tempdir().unwrap();
+    let env = Environment::builder().open(dir.path()).unwrap();
+
+    // Create DUPFIXED database with 4-byte values
+    let txn = begin_rw(&env).unwrap();
+    let db = txn.create_db(None, DatabaseFlags::DUP_SORT | DatabaseFlags::DUP_FIXED).unwrap();
+
+    txn.put(db, b"aaa", &1u32.to_le_bytes(), WriteFlags::empty()).unwrap();
+    txn.put(db, b"bbb", &2u32.to_le_bytes(), WriteFlags::empty()).unwrap();
+    txn.put(db, b"ccc", &3u32.to_le_bytes(), WriteFlags::empty()).unwrap();
+    txn.put(db, b"ddd", &4u32.to_le_bytes(), WriteFlags::empty()).unwrap();
+
+    txn.commit().unwrap();
+
+    // Start from "bbb"
+    let txn = begin_ro(&env).unwrap();
+    let db = txn.open_db(None).unwrap();
+    let mut cursor = txn.cursor(db).unwrap();
+
+    let results: Vec<(Vec<u8>, [u8; 4])> =
+        cursor.iter_dupfixed_from::<Vec<u8>, 4>(b"bbb").unwrap().map(|r| r.unwrap()).collect();
+
+    assert_eq!(results.len(), 3);
+    assert_eq!(results[0], (b"bbb".to_vec(), 2u32.to_le_bytes()));
+    assert_eq!(results[1], (b"ccc".to_vec(), 3u32.to_le_bytes()));
+    assert_eq!(results[2], (b"ddd".to_vec(), 4u32.to_le_bytes()));
+}
+
+#[test]
+fn test_iter_dupfixed_from_v1() {
+    test_iter_dupfixed_from_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_iter_dupfixed_from_v2() {
+    test_iter_dupfixed_from_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+fn test_iter_dupfixed_empty_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
+    let dir = tempdir().unwrap();
+    let env = Environment::builder().open(dir.path()).unwrap();
+
+    // Create empty DUPFIXED database
+    let txn = begin_rw(&env).unwrap();
+    txn.create_db(None, DatabaseFlags::DUP_SORT | DatabaseFlags::DUP_FIXED).unwrap();
+    txn.commit().unwrap();
+
+    let txn = begin_ro(&env).unwrap();
+    let db = txn.open_db(None).unwrap();
+    let mut cursor = txn.cursor(db).unwrap();
+
+    let results: Vec<(Vec<u8>, [u8; 4])> =
+        cursor.iter_dupfixed_start::<Vec<u8>, 4>().unwrap().map(|r| r.unwrap()).collect();
+
+    assert!(results.is_empty());
+}
+
+#[test]
+fn test_iter_dupfixed_empty_v1() {
+    test_iter_dupfixed_empty_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_iter_dupfixed_empty_v2() {
+    test_iter_dupfixed_empty_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+// NOTE: iter_dupfixed DUP_FIXED validation tests have been moved to the debug-only
+// module below. In debug builds, these validations panic via debug_assert!
+// In release builds, the checks are skipped and MDBX will return errors.
+
+fn test_iter_dupfixed_many_values_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
+    use std::collections::HashSet;
+
+    let dir = tempdir().unwrap();
+    let env = Environment::builder().open(dir.path()).unwrap();
+
+    // Create DUPFIXED database with many values to test page boundaries
+    let txn = begin_rw(&env).unwrap();
+    let db = txn.create_db(None, DatabaseFlags::DUP_SORT | DatabaseFlags::DUP_FIXED).unwrap();
+
+    // Insert 1000 values to ensure we span multiple pages
+    // Note: MDBX sorts duplicates lexicographically by bytes, not as integers.
+    // So u32 values will be sorted by their byte representation, not numerically.
+    for i in 0u32..1000 {
+        txn.put(db, b"key", &i.to_le_bytes(), WriteFlags::empty()).unwrap();
+    }
+
+    txn.commit().unwrap();
+
+    // Read back and verify all values are present (order may differ from insertion)
+    let txn = begin_ro(&env).unwrap();
+    let db = txn.open_db(None).unwrap();
+    let mut cursor = txn.cursor(db).unwrap();
+
+    let results: Vec<(Vec<u8>, [u8; 4])> =
+        cursor.iter_dupfixed_start::<Vec<u8>, 4>().unwrap().map(|r| r.unwrap()).collect();
+
+    // Verify count
+    assert_eq!(results.len(), 1000);
+
+    // Verify all keys are "key"
+    for (key, _) in &results {
+        assert_eq!(key, b"key");
+    }
+
+    // Verify all 1000 values are present (regardless of order)
+    let values: HashSet<u32> = results.iter().map(|(_, v)| u32::from_le_bytes(*v)).collect();
+    let expected: HashSet<u32> = (0u32..1000).collect();
+    assert_eq!(values, expected);
+
+    // Verify values are in lexicographic byte order (MDBX sorts duplicates this way)
+    for window in results.windows(2) {
+        let v1 = &window[0].1;
+        let v2 = &window[1].1;
+        assert!(v1 <= v2, "values not in sorted order: {:?} > {:?}", v1, v2);
+    }
+}
+
+#[test]
+fn test_iter_dupfixed_many_values_v1() {
+    test_iter_dupfixed_many_values_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_iter_dupfixed_many_values_v2() {
+    test_iter_dupfixed_many_values_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+fn test_iter_dupfixed_from_nonexistent_key_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
+    let dir = tempdir().unwrap();
+    let env = Environment::builder().open(dir.path()).unwrap();
+
+    let txn = begin_rw(&env).unwrap();
+    let db = txn.create_db(None, DatabaseFlags::DUP_SORT | DatabaseFlags::DUP_FIXED).unwrap();
+    txn.put(db, b"aaa", &1u32.to_le_bytes(), WriteFlags::empty()).unwrap();
+    txn.put(db, b"ccc", &2u32.to_le_bytes(), WriteFlags::empty()).unwrap();
+    txn.commit().unwrap();
+
+    let txn = begin_ro(&env).unwrap();
+    let db = txn.open_db(None).unwrap();
+    let mut cursor = txn.cursor(db).unwrap();
+
+    // Start from "bbb" which doesn't exist - should find "ccc"
+    let results: Vec<(Vec<u8>, [u8; 4])> =
+        cursor.iter_dupfixed_from::<Vec<u8>, 4>(b"bbb").unwrap().map(|r| r.unwrap()).collect();
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0], (b"ccc".to_vec(), 2u32.to_le_bytes()));
+}
+
+#[test]
+fn test_iter_dupfixed_from_nonexistent_key_v1() {
+    test_iter_dupfixed_from_nonexistent_key_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_iter_dupfixed_from_nonexistent_key_v2() {
+    test_iter_dupfixed_from_nonexistent_key_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+fn test_iter_dupfixed_from_past_end_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
+    let dir = tempdir().unwrap();
+    let env = Environment::builder().open(dir.path()).unwrap();
+
+    let txn = begin_rw(&env).unwrap();
+    let db = txn.create_db(None, DatabaseFlags::DUP_SORT | DatabaseFlags::DUP_FIXED).unwrap();
+    txn.put(db, b"aaa", &1u32.to_le_bytes(), WriteFlags::empty()).unwrap();
+    txn.commit().unwrap();
+
+    let txn = begin_ro(&env).unwrap();
+    let db = txn.open_db(None).unwrap();
+    let mut cursor = txn.cursor(db).unwrap();
+
+    // Start from "zzz" which is past all keys
+    let results: Vec<(Vec<u8>, [u8; 4])> =
+        cursor.iter_dupfixed_from::<Vec<u8>, 4>(b"zzz").unwrap().map(|r| r.unwrap()).collect();
+
+    assert!(results.is_empty());
+}
+
+#[test]
+fn test_iter_dupfixed_from_past_end_v1() {
+    test_iter_dupfixed_from_past_end_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_iter_dupfixed_from_past_end_v2() {
+    test_iter_dupfixed_from_past_end_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+// =============================================================================
+// DUPFIXED Single-Key Iterator Tests (iter_dupfixed_of)
+// =============================================================================
+
+fn test_iter_dupfixed_of_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
+    let dir = tempdir().unwrap();
+    let env = Environment::builder().open(dir.path()).unwrap();
+
+    // Create DUPFIXED database with multiple keys
+    let txn = begin_rw(&env).unwrap();
+    let db = txn.create_db(None, DatabaseFlags::DUP_SORT | DatabaseFlags::DUP_FIXED).unwrap();
+
+    // Insert values for key1
+    txn.put(db, b"key1", &1u32.to_le_bytes(), WriteFlags::empty()).unwrap();
+    txn.put(db, b"key1", &2u32.to_le_bytes(), WriteFlags::empty()).unwrap();
+    txn.put(db, b"key1", &3u32.to_le_bytes(), WriteFlags::empty()).unwrap();
+
+    // Insert values for key2
+    txn.put(db, b"key2", &10u32.to_le_bytes(), WriteFlags::empty()).unwrap();
+    txn.put(db, b"key2", &20u32.to_le_bytes(), WriteFlags::empty()).unwrap();
+
+    // Insert values for key3
+    txn.put(db, b"key3", &100u32.to_le_bytes(), WriteFlags::empty()).unwrap();
+
+    txn.commit().unwrap();
+
+    // Test: iter_dupfixed_of should only return values for key2
+    let txn = begin_ro(&env).unwrap();
+    let db = txn.open_db(None).unwrap();
+    let mut cursor = txn.cursor(db).unwrap();
+
+    let results: Vec<[u8; 4]> =
+        cursor.iter_dupfixed_of::<4>(b"key2").unwrap().map(|r| r.unwrap()).collect();
+
+    // Should only contain key2's values
+    assert_eq!(results.len(), 2);
+    assert_eq!(u32::from_le_bytes(results[0]), 10);
+    assert_eq!(u32::from_le_bytes(results[1]), 20);
+}
+
+#[test]
+fn test_iter_dupfixed_of_v1() {
+    test_iter_dupfixed_of_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_iter_dupfixed_of_v2() {
+    test_iter_dupfixed_of_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+fn test_iter_dupfixed_of_nonexistent_key_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
+    let dir = tempdir().unwrap();
+    let env = Environment::builder().open(dir.path()).unwrap();
+
+    // Create DUPFIXED database with some data
+    let txn = begin_rw(&env).unwrap();
+    let db = txn.create_db(None, DatabaseFlags::DUP_SORT | DatabaseFlags::DUP_FIXED).unwrap();
+    txn.put(db, b"aaa", &1u32.to_le_bytes(), WriteFlags::empty()).unwrap();
+    txn.put(db, b"ccc", &2u32.to_le_bytes(), WriteFlags::empty()).unwrap();
+    txn.commit().unwrap();
+
+    let txn = begin_ro(&env).unwrap();
+    let db = txn.open_db(None).unwrap();
+    let mut cursor = txn.cursor(db).unwrap();
+
+    // Seek nonexistent key "bbb" - should return empty iterator
+    let results: Vec<[u8; 4]> =
+        cursor.iter_dupfixed_of::<4>(b"bbb").unwrap().map(|r| r.unwrap()).collect();
+
+    assert!(results.is_empty());
+}
+
+#[test]
+fn test_iter_dupfixed_of_nonexistent_key_v1() {
+    test_iter_dupfixed_of_nonexistent_key_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_iter_dupfixed_of_nonexistent_key_v2() {
+    test_iter_dupfixed_of_nonexistent_key_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+fn test_iter_dupfixed_of_many_values_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
+    use std::collections::HashSet;
+
+    let dir = tempdir().unwrap();
+    let env = Environment::builder().open(dir.path()).unwrap();
+
+    // Create DUPFIXED database with many values to test page boundaries
+    let txn = begin_rw(&env).unwrap();
+    let db = txn.create_db(None, DatabaseFlags::DUP_SORT | DatabaseFlags::DUP_FIXED).unwrap();
+
+    // Insert values for "before" key
+    txn.put(db, b"before", &999u32.to_le_bytes(), WriteFlags::empty()).unwrap();
+
+    // Insert 1000 values for target key to ensure we span multiple pages
+    for i in 0u32..1000 {
+        txn.put(db, b"target", &i.to_le_bytes(), WriteFlags::empty()).unwrap();
+    }
+
+    // Insert values for "after" key
+    txn.put(db, b"zafter", &888u32.to_le_bytes(), WriteFlags::empty()).unwrap();
+
+    txn.commit().unwrap();
+
+    // Read back using iter_dupfixed_of
+    let txn = begin_ro(&env).unwrap();
+    let db = txn.open_db(None).unwrap();
+    let mut cursor = txn.cursor(db).unwrap();
+
+    let results: Vec<[u8; 4]> =
+        cursor.iter_dupfixed_of::<4>(b"target").unwrap().map(|r| r.unwrap()).collect();
+
+    // Verify count - should be exactly 1000
+    assert_eq!(results.len(), 1000);
+
+    // Verify all 1000 values are present (regardless of order)
+    let values: HashSet<u32> = results.iter().map(|v| u32::from_le_bytes(*v)).collect();
+    let expected: HashSet<u32> = (0u32..1000).collect();
+    assert_eq!(values, expected);
+
+    // Verify no values from "before" or "zafter" keys leaked in
+    for v in &results {
+        let num = u32::from_le_bytes(*v);
+        assert!(num < 1000, "unexpected value {num} from other key");
+    }
+}
+
+#[test]
+fn test_iter_dupfixed_of_many_values_v1() {
+    test_iter_dupfixed_of_many_values_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_iter_dupfixed_of_many_values_v2() {
+    test_iter_dupfixed_of_many_values_impl(V2Factory::begin_rw, V2Factory::begin_ro);
 }
 
 // Debug assertion tests - only run in debug builds
@@ -1147,5 +1475,66 @@ mod append_debug_tests {
         let result = cursor.append_dup(b"key", b"1");
         assert!(result.is_err());
         assert!(matches!(result, Err(MdbxError::KeyMismatch)));
+    }
+
+    // DUP_SORT validation tests - these panic in debug builds
+    #[test]
+    #[should_panic(expected = "Operation requires DUP_SORT database flag")]
+    fn test_first_dup_on_non_dupsort_panics() {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+
+        let txn = env.begin_rw_sync().unwrap();
+        let db = txn.open_db(None).unwrap();
+        txn.put(db, b"key1", b"val1", WriteFlags::empty()).unwrap();
+
+        let mut cursor = txn.cursor(db).unwrap();
+        cursor.first::<(), ()>().unwrap();
+        let _ = cursor.first_dup::<()>();
+    }
+
+    #[test]
+    #[should_panic(expected = "Operation requires DUP_SORT database flag")]
+    fn test_append_dup_on_non_dupsort_panics() {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+
+        let txn = env.begin_rw_sync().unwrap();
+        let db = txn.open_db(None).unwrap();
+        let mut cursor = txn.cursor(db).unwrap();
+        let _ = cursor.append_dup(b"key", b"value");
+    }
+
+    // DUP_FIXED validation tests - these panic in debug builds
+    #[test]
+    #[should_panic(expected = "Operation requires DUP_FIXED database flag")]
+    fn test_get_multiple_on_non_dupfixed_panics() {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+
+        let txn = env.begin_rw_sync().unwrap();
+        let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
+        txn.put(db, b"key1", b"val1", WriteFlags::empty()).unwrap();
+
+        let mut cursor = txn.cursor(db).unwrap();
+        cursor.first::<(), ()>().unwrap();
+        let _ = cursor.get_multiple::<()>();
+    }
+
+    #[test]
+    #[should_panic(expected = "Operation requires DUP_FIXED database flag")]
+    fn test_iter_dupfixed_on_non_dupfixed_panics() {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+
+        let txn = env.begin_rw_sync().unwrap();
+        let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
+        txn.put(db, b"key", b"value", WriteFlags::empty()).unwrap();
+        txn.commit().unwrap();
+
+        let txn = env.begin_ro_sync().unwrap();
+        let db = txn.open_db(None).unwrap();
+        let mut cursor = txn.cursor(db).unwrap();
+        let _ = cursor.iter_dupfixed_start::<Vec<u8>, 4>();
     }
 }

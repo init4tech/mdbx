@@ -11,8 +11,8 @@
 //! - [`SharedCache`]: A thread-safe cache using `Arc<RwLock<...>>` for
 //!   synchronized transactions.
 //!
-//! [`TxSync`]: crate::tx::TxSync
-//! [`TxUnsync`]: crate::tx::TxUnsync
+//! [`TxSync`]: crate::tx::aliases::TxSync
+//! [`TxUnsync`]: crate::tx::aliases::TxUnsync
 
 use crate::Database;
 use parking_lot::RwLock;

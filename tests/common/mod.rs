@@ -7,7 +7,10 @@
 use signet_libmdbx::{
     Cursor, Database, DatabaseFlags, Environment, MdbxResult, ReadResult, Ro, RoSync, Rw, RwSync,
     Stat, TableObject, TransactionKind, TxSync, TxUnsync, WriteFlags, ffi,
-    tx::{RoTxSync, RoTxUnsync, RwTxSync, RwTxUnsync, WriteMarker},
+    tx::{
+        WriteMarker,
+        aliases::{RoTxSync, RoTxUnsync, RwTxSync, RwTxUnsync},
+    },
 };
 
 /// Trait for read-write transaction operations used in tests.

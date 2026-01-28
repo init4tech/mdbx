@@ -2,8 +2,8 @@
 mod common;
 use common::{TestRoTxn, TestRwTxn, V1Factory, V2Factory};
 use signet_libmdbx::{
-    DatabaseFlags, Environment, MdbxError, MdbxResult, ObjectLength, ReadError, ReadResult,
-    WriteFlags, tx::TxPtrAccess,
+    Cursor, DatabaseFlags, Environment, MdbxError, MdbxResult, ObjectLength, ReadError, ReadResult,
+    TransactionKind, WriteFlags,
 };
 use std::{borrow::Cow, hint::black_box};
 use tempfile::tempdir;
@@ -25,7 +25,7 @@ fn test_get_impl<RwTx, RoTx>(
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
 
-    let mut txn = begin_rw(&env).unwrap();
+    let txn = begin_rw(&env).unwrap();
     let db = txn.open_db(None).unwrap();
 
     assert_eq!(None, txn.cursor(db).unwrap().first::<(), ()>().unwrap());
@@ -65,7 +65,7 @@ fn test_get_dup_impl<RwTx, RoTx>(
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
 
-    let mut txn = begin_rw(&env).unwrap();
+    let txn = begin_rw(&env).unwrap();
     let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
     txn.put(db, b"key1", b"val1", WriteFlags::empty()).unwrap();
     txn.put(db, b"key1", b"val2", WriteFlags::empty()).unwrap();
@@ -124,7 +124,7 @@ fn test_get_dupfixed_impl<RwTx, RoTx>(
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
 
-    let mut txn = begin_rw(&env).unwrap();
+    let txn = begin_rw(&env).unwrap();
     let db = txn.create_db(None, DatabaseFlags::DUP_SORT | DatabaseFlags::DUP_FIXED).unwrap();
     txn.put(db, b"key1", b"val1", WriteFlags::empty()).unwrap();
     txn.put(db, b"key1", b"val2", WriteFlags::empty()).unwrap();
@@ -167,7 +167,7 @@ fn test_iter_impl<RwTx, RoTx>(
     ];
 
     {
-        let mut txn = begin_rw(&env).unwrap();
+        let txn = begin_rw(&env).unwrap();
         let db = txn.open_db(None).unwrap();
         for (key, data) in &items {
             txn.put(db, key, data, WriteFlags::empty()).unwrap();
@@ -175,7 +175,7 @@ fn test_iter_impl<RwTx, RoTx>(
         txn.commit().unwrap();
     }
 
-    let mut txn = begin_ro(&env).unwrap();
+    let txn = begin_ro(&env).unwrap();
     let db = txn.open_db(None).unwrap();
     let mut cursor = txn.cursor(db).unwrap();
 
@@ -231,7 +231,7 @@ fn test_iter_empty_database_impl<RwTx, RoTx>(
 {
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
-    let mut txn = begin_ro(&env).unwrap();
+    let txn = begin_ro(&env).unwrap();
     let db = txn.open_db(None).unwrap();
     let mut cursor = txn.cursor(db).unwrap();
 
@@ -260,11 +260,11 @@ fn test_iter_empty_dup_database_impl<RwTx, RoTx>(
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
 
-    let mut txn = begin_rw(&env).unwrap();
+    let txn = begin_rw(&env).unwrap();
     txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
     txn.commit().unwrap();
 
-    let mut txn = begin_ro(&env).unwrap();
+    let txn = begin_ro(&env).unwrap();
     let db = txn.open_db(None).unwrap();
     let mut cursor = txn.cursor(db).unwrap();
 
@@ -298,7 +298,7 @@ fn test_iter_dup_impl<RwTx, RoTx>(
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
 
-    let mut txn = begin_rw(&env).unwrap();
+    let txn = begin_rw(&env).unwrap();
     txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
     txn.commit().unwrap();
 
@@ -321,7 +321,7 @@ fn test_iter_dup_impl<RwTx, RoTx>(
     .collect();
 
     {
-        let mut txn = begin_rw(&env).unwrap();
+        let txn = begin_rw(&env).unwrap();
         for (key, data) in items.clone() {
             let db = txn.open_db(None).unwrap();
             txn.put(db, &key, &data, WriteFlags::empty()).unwrap();
@@ -329,7 +329,7 @@ fn test_iter_dup_impl<RwTx, RoTx>(
         txn.commit().unwrap();
     }
 
-    let mut txn = begin_ro(&env).unwrap();
+    let txn = begin_ro(&env).unwrap();
     let db = txn.open_db(None).unwrap();
     let mut cursor = txn.cursor(db).unwrap();
     assert_eq!(items, cursor.iter_dup().flatten().flatten().collect::<Result<Vec<_>>>().unwrap());
@@ -419,7 +419,7 @@ fn test_iter_del_get_impl<RwTx, RoTx>(
 
     let items = vec![(*b"a", *b"1"), (*b"b", *b"2")];
     {
-        let mut txn = begin_rw(&env).unwrap();
+        let txn = begin_rw(&env).unwrap();
         let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
         assert_eq!(
             txn.cursor(db)
@@ -435,7 +435,7 @@ fn test_iter_del_get_impl<RwTx, RoTx>(
     }
 
     {
-        let mut txn = begin_rw(&env).unwrap();
+        let txn = begin_rw(&env).unwrap();
         let db = txn.open_db(None).unwrap();
         for (key, data) in &items {
             txn.put(db, key, data, WriteFlags::empty()).unwrap();
@@ -443,7 +443,7 @@ fn test_iter_del_get_impl<RwTx, RoTx>(
         txn.commit().unwrap();
     }
 
-    let mut txn = begin_rw(&env).unwrap();
+    let txn = begin_rw(&env).unwrap();
     let db = txn.open_db(None).unwrap();
     let mut cursor = txn.cursor(db).unwrap();
     assert_eq!(
@@ -491,7 +491,7 @@ fn test_put_del_impl<RwTx, RoTx>(
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
 
-    let mut txn = begin_rw(&env).unwrap();
+    let txn = begin_rw(&env).unwrap();
     let db = txn.open_db(None).unwrap();
     let mut cursor = txn.cursor(db).unwrap();
 
@@ -539,7 +539,7 @@ fn test_dup_sort_validation_on_non_dupsort_db_impl<RwTx, RoTx>(
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
 
-    let mut txn = begin_rw(&env).unwrap();
+    let txn = begin_rw(&env).unwrap();
     let db = txn.open_db(None).unwrap(); // Non-DUPSORT database
     txn.put(db, b"key1", b"val1", WriteFlags::empty()).unwrap();
 
@@ -586,7 +586,7 @@ fn test_dup_fixed_validation_on_non_dupfixed_db_impl<RwTx, RoTx>(
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
 
-    let mut txn = begin_rw(&env).unwrap();
+    let txn = begin_rw(&env).unwrap();
     // Create DUPSORT but NOT DUPFIXED database
     let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
     txn.put(db, b"key1", b"val1", WriteFlags::empty()).unwrap();
@@ -625,7 +625,7 @@ fn test_dup_sort_methods_work_on_dupsort_db_impl<RwTx, RoTx>(
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
 
-    let mut txn = begin_rw(&env).unwrap();
+    let txn = begin_rw(&env).unwrap();
     let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
     txn.put(db, b"key1", b"val1", WriteFlags::empty()).unwrap();
     txn.put(db, b"key1", b"val2", WriteFlags::empty()).unwrap();
@@ -662,7 +662,7 @@ fn test_dup_fixed_methods_work_on_dupfixed_db_impl<RwTx, RoTx>(
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
 
-    let mut txn = begin_rw(&env).unwrap();
+    let txn = begin_rw(&env).unwrap();
     let db = txn.create_db(None, DatabaseFlags::DUP_SORT | DatabaseFlags::DUP_FIXED).unwrap();
     txn.put(db, b"key1", b"val1", WriteFlags::empty()).unwrap();
     txn.put(db, b"key1", b"val2", WriteFlags::empty()).unwrap();
@@ -697,14 +697,14 @@ fn test_iter_exhausted_cursor_repositions_impl<RwTx, RoTx>(
     let dir = tempdir().unwrap();
     let env = Environment::builder().open(dir.path()).unwrap();
 
-    let mut txn = begin_rw(&env).unwrap();
+    let txn = begin_rw(&env).unwrap();
     let db = txn.open_db(None).unwrap();
     for i in 0u8..100 {
         txn.put(db, &[i], &[i], WriteFlags::empty()).unwrap();
     }
     txn.commit().unwrap();
 
-    let mut txn = begin_ro(&env).unwrap();
+    let txn = begin_ro(&env).unwrap();
     let db = txn.open_db(None).unwrap();
     let mut cursor = txn.cursor(db).unwrap();
 
@@ -746,7 +746,7 @@ fn test_iter_benchmark_pattern_impl<RwTx, RoTx>(
 
     let n = 100u32;
 
-    let mut txn = begin_rw(&env).unwrap();
+    let txn = begin_rw(&env).unwrap();
     let db = txn.open_db(None).unwrap();
     for i in 0..n {
         let key = format!("key{i}");
@@ -756,7 +756,7 @@ fn test_iter_benchmark_pattern_impl<RwTx, RoTx>(
     txn.commit().unwrap();
 
     // Setup like benchmark: transaction and db outside the "iteration"
-    let mut txn = begin_ro(&env).unwrap();
+    let txn = begin_ro(&env).unwrap();
     let db = txn.open_db(None).unwrap();
 
     // Run the benchmark closure multiple times to match criterion behavior
@@ -779,9 +779,7 @@ fn test_iter_benchmark_pattern_impl<RwTx, RoTx>(
         }
 
         // Loop 3: internal iterate function (doesn't affect count)
-        fn iterate<A: TxPtrAccess>(
-            cursor: &mut signet_libmdbx::Cursor<signet_libmdbx::RO, A>,
-        ) -> ReadResult<()> {
+        fn iterate<K: TransactionKind>(cursor: &mut Cursor<K>) -> ReadResult<()> {
             for result in cursor.iter::<ObjectLength, ObjectLength>() {
                 let (key_len, data_len) = result?;
                 black_box(*key_len + *data_len);
@@ -806,190 +804,6 @@ fn test_iter_benchmark_pattern_v2() {
 }
 
 // =============================================================================
-// Timeout Tests (V2 only with read-tx-timeouts feature)
-// =============================================================================
-
-#[cfg(feature = "read-tx-timeouts")]
-mod timeout_tests {
-    use signet_libmdbx::*;
-    use std::time::Duration;
-    use tempfile::tempdir;
-
-    const SHORT_TIMEOUT: Duration = Duration::from_millis(100);
-    const WAIT_FOR_TIMEOUT: Duration = Duration::from_millis(200);
-
-    /// Test that cursor operations fail after RO transaction times out.
-    #[test]
-    fn test_cursor_operations_fail_after_timeout() {
-        let dir = tempdir().unwrap();
-        let env = Environment::builder().open(dir.path()).unwrap();
-
-        // Write some data
-        {
-            let txn = env.begin_rw_txn().unwrap();
-            let db = txn.open_db(None).unwrap();
-            txn.put(db, b"key1", b"val1", WriteFlags::empty()).unwrap();
-            txn.put(db, b"key2", b"val2", WriteFlags::empty()).unwrap();
-            txn.commit().unwrap();
-        }
-
-        // Create a v2 transaction with short timeout
-        let mut txn = env.begin_ro_single_thread_with_timeout(SHORT_TIMEOUT).unwrap();
-        let db = txn.open_db(None).unwrap();
-        let mut cursor = txn.cursor(db).unwrap();
-
-        // Cursor should work before timeout
-        assert_eq!(cursor.first().unwrap(), Some((*b"key1", *b"val1")));
-
-        // Wait for timeout
-        std::thread::sleep(WAIT_FOR_TIMEOUT);
-
-        // Cursor operations should now fail with ReadTransactionTimeout
-        let err = cursor.first::<(), ()>().unwrap_err();
-        assert!(
-            matches!(err, ReadError::Mdbx(MdbxError::ReadTransactionTimeout)),
-            "Expected ReadTransactionTimeout, got: {err:?}"
-        );
-    }
-
-    /// Test cursor cleanup after timeout (no memory leak).
-    #[test]
-    fn test_cursor_cleanup_after_timeout() {
-        let dir = tempdir().unwrap();
-        let env = Environment::builder().open(dir.path()).unwrap();
-
-        // Write some data
-        {
-            let txn = env.begin_rw_txn().unwrap();
-            let db = txn.open_db(None).unwrap();
-            txn.put(db, b"key1", b"val1", WriteFlags::empty()).unwrap();
-            txn.commit().unwrap();
-        }
-
-        // Create transaction with short timeout
-        let mut txn = env.begin_ro_single_thread_with_timeout(SHORT_TIMEOUT).unwrap();
-        let db = txn.open_db(None).unwrap();
-        let cursor = txn.cursor(db).unwrap();
-
-        // Wait for timeout
-        std::thread::sleep(WAIT_FOR_TIMEOUT);
-
-        // Dropping cursor after timeout should not panic
-        drop(cursor);
-        drop(txn);
-
-        // Environment should still be usable
-        let txn = env.begin_ro_txn().unwrap();
-        let db = txn.open_db(None).unwrap();
-        let mut cursor = txn.cursor(db).unwrap();
-        assert_eq!(cursor.first().unwrap(), Some((*b"key1", *b"val1")));
-    }
-
-    /// Test multiple cursors cleanup after timeout.
-    #[test]
-    fn test_multiple_cursors_cleanup_after_timeout() {
-        let dir = tempdir().unwrap();
-        let env = Environment::builder().set_max_dbs(10).open(dir.path()).unwrap();
-
-        // Create databases and write data
-        {
-            let txn = env.begin_rw_txn().unwrap();
-            let db1 = txn.create_db(Some("db1"), DatabaseFlags::empty()).unwrap();
-            let db2 = txn.create_db(Some("db2"), DatabaseFlags::empty()).unwrap();
-            txn.put(db1, b"k1", b"v1", WriteFlags::empty()).unwrap();
-            txn.put(db2, b"k2", b"v2", WriteFlags::empty()).unwrap();
-            txn.commit().unwrap();
-        }
-
-        // Create transaction with short timeout and multiple cursors
-        let mut txn = env.begin_ro_single_thread_with_timeout(SHORT_TIMEOUT).unwrap();
-        let db1 = txn.open_db(Some("db1")).unwrap();
-        let db2 = txn.open_db(Some("db2")).unwrap();
-        let cursor1 = txn.cursor(db1).unwrap();
-        let cursor2 = txn.cursor(db2).unwrap();
-
-        // Wait for timeout
-        std::thread::sleep(WAIT_FOR_TIMEOUT);
-
-        // Dropping all cursors after timeout should not panic
-        drop(cursor1);
-        drop(cursor2);
-        drop(txn);
-
-        // Verify environment is still usable
-        let txn = env.begin_ro_txn().unwrap();
-        let db = txn.open_db(Some("db1")).unwrap();
-        let mut cursor = txn.cursor(db).unwrap();
-        assert_eq!(cursor.first().unwrap(), Some((*b"k1", *b"v1")));
-    }
-
-    /// Test that transactions without timeout work correctly.
-    #[test]
-    fn test_no_timeout_transaction_works() {
-        let dir = tempdir().unwrap();
-        let env = Environment::builder().open(dir.path()).unwrap();
-
-        // Write data
-        {
-            let txn = env.begin_rw_txn().unwrap();
-            let db = txn.open_db(None).unwrap();
-            txn.put(db, b"key1", b"val1", WriteFlags::empty()).unwrap();
-            txn.commit().unwrap();
-        }
-
-        // Create transaction without timeout
-        let mut txn = env.begin_ro_single_thread_no_timeout().unwrap();
-        let db = txn.open_db(None).unwrap();
-        let mut cursor = txn.cursor(db).unwrap();
-
-        // Cursor should work before the "normal" timeout period
-        assert_eq!(cursor.first().unwrap(), Some((*b"key1", *b"val1")));
-
-        // Wait longer than the short timeout (but not forever)
-        std::thread::sleep(WAIT_FOR_TIMEOUT);
-
-        // Cursor should still work since there's no timeout
-        assert_eq!(cursor.first().unwrap(), Some((*b"key1", *b"val1")));
-    }
-
-    /// Test iterator behavior after timeout.
-    #[test]
-    fn test_iter_fails_after_timeout() {
-        let dir = tempdir().unwrap();
-        let env = Environment::builder().open(dir.path()).unwrap();
-
-        // Write data
-        {
-            let txn = env.begin_rw_txn().unwrap();
-            let db = txn.open_db(None).unwrap();
-            for i in 0u8..10 {
-                txn.put(db, [i], [i], WriteFlags::empty()).unwrap();
-            }
-            txn.commit().unwrap();
-        }
-
-        // Create transaction with short timeout
-        let mut txn = env.begin_ro_single_thread_with_timeout(SHORT_TIMEOUT).unwrap();
-        let db = txn.open_db(None).unwrap();
-        let mut cursor = txn.cursor(db).unwrap();
-
-        // Start iterating before timeout
-        let mut iter = cursor.iter::<[u8; 1], [u8; 1]>();
-        assert!(iter.next().unwrap().is_ok());
-
-        // Wait for timeout
-        std::thread::sleep(WAIT_FOR_TIMEOUT);
-
-        // Iterator should return timeout error
-        let err = iter.next().unwrap().unwrap_err();
-        assert!(
-            matches!(err, ReadError::Mdbx(MdbxError::ReadTransactionTimeout)),
-            "Expected ReadTransactionTimeout, got: {err:?}"
-        );
-    }
-}
-
-// =============================================================================
 // Append API Tests
 // =============================================================================
 
@@ -1004,7 +818,7 @@ fn test_cursor_append_impl<RwTx, RoTx>(
     let env = Environment::builder().open(dir.path()).unwrap();
 
     // Append keys in sorted order: a, b, c
-    let mut txn = begin_rw(&env).unwrap();
+    let txn = begin_rw(&env).unwrap();
     let db = txn.open_db(None).unwrap();
     let mut cursor = txn.cursor(db).unwrap();
 
@@ -1016,7 +830,7 @@ fn test_cursor_append_impl<RwTx, RoTx>(
     txn.commit().unwrap();
 
     // Verify data was written correctly
-    let mut txn = begin_ro(&env).unwrap();
+    let txn = begin_ro(&env).unwrap();
     let db = txn.open_db(None).unwrap();
     let mut cursor = txn.cursor(db).unwrap();
 
@@ -1048,7 +862,7 @@ fn test_tx_append_impl<RwTx, RoTx>(
 
     // Write using transaction-level append
     {
-        let mut txn = begin_rw(&env).unwrap();
+        let txn = begin_rw(&env).unwrap();
         let db = txn.open_db(None).unwrap();
 
         txn.append(db, b"key1", b"val1").unwrap();
@@ -1059,7 +873,7 @@ fn test_tx_append_impl<RwTx, RoTx>(
     }
 
     // Verify data was written correctly
-    let mut txn = begin_ro(&env).unwrap();
+    let txn = begin_ro(&env).unwrap();
     let db = txn.open_db(None).unwrap();
     let mut cursor = txn.cursor(db).unwrap();
 
@@ -1089,7 +903,7 @@ fn test_append_dup_impl<RwTx, RoTx>(
     let env = Environment::builder().open(dir.path()).unwrap();
 
     // Create DUPSORT database and append duplicates
-    let mut txn = begin_rw(&env).unwrap();
+    let txn = begin_rw(&env).unwrap();
     let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
     let mut cursor = txn.cursor(db).unwrap();
 
@@ -1102,7 +916,7 @@ fn test_append_dup_impl<RwTx, RoTx>(
     txn.commit().unwrap();
 
     // Verify
-    let mut txn = begin_ro(&env).unwrap();
+    let txn = begin_ro(&env).unwrap();
     let db = txn.open_db(None).unwrap();
     let mut cursor = txn.cursor(db).unwrap();
 
@@ -1130,7 +944,7 @@ where
     let env = Environment::builder().open(dir.path()).unwrap();
 
     // Try append_dup on non-DUPSORT database
-    let mut txn = begin_rw(&env).unwrap();
+    let txn = begin_rw(&env).unwrap();
     let db = txn.open_db(None).unwrap(); // Non-DUPSORT database
     let mut cursor = txn.cursor(db).unwrap();
 
@@ -1160,7 +974,7 @@ mod append_debug_tests {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
 
-        let txn = env.begin_rw_txn().unwrap();
+        let txn = env.begin_rw_sync().unwrap();
         let db = txn.open_db(None).unwrap();
         let mut cursor = txn.cursor(db).unwrap();
 
@@ -1177,7 +991,7 @@ mod append_debug_tests {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
 
-        let txn = env.begin_rw_txn().unwrap();
+        let txn = env.begin_rw_sync().unwrap();
         let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
         let mut cursor = txn.cursor(db).unwrap();
 
@@ -1194,7 +1008,7 @@ mod append_debug_tests {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
 
-        let txn = env.begin_rw_txn().unwrap();
+        let txn = env.begin_rw_sync().unwrap();
         let db = txn.open_db(None).unwrap();
 
         // Insert "b" first
@@ -1210,7 +1024,7 @@ mod append_debug_tests {
         let dir = tempdir().unwrap();
         let env = Environment::builder().open(dir.path()).unwrap();
 
-        let txn = env.begin_rw_txn().unwrap();
+        let txn = env.begin_rw_sync().unwrap();
         let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
 
         // Insert duplicate "2" first
@@ -1231,7 +1045,7 @@ mod append_debug_tests {
         let env = Environment::builder().open(dir.path()).unwrap();
 
         // Create REVERSE_KEY database
-        let txn = env.begin_rw_txn().unwrap();
+        let txn = env.begin_rw_sync().unwrap();
         let db = txn.create_db(None, DatabaseFlags::REVERSE_KEY).unwrap();
         let mut cursor = txn.cursor(db).unwrap();
 
@@ -1246,7 +1060,7 @@ mod append_debug_tests {
         txn.commit().unwrap();
 
         // Verify data was written
-        let txn = env.begin_ro_txn().unwrap();
+        let txn = env.begin_ro_sync().unwrap();
         let db = txn.open_db(None).unwrap();
         let mut cursor = txn.cursor(db).unwrap();
 
@@ -1264,7 +1078,7 @@ mod append_debug_tests {
         let env = Environment::builder().open(dir.path()).unwrap();
 
         // Create REVERSE_KEY database
-        let txn = env.begin_rw_txn().unwrap();
+        let txn = env.begin_rw_sync().unwrap();
         let db = txn.create_db(None, DatabaseFlags::REVERSE_KEY).unwrap();
         let mut cursor = txn.cursor(db).unwrap();
 
@@ -1289,7 +1103,7 @@ mod append_debug_tests {
         let env = Environment::builder().open(dir.path()).unwrap();
 
         // Create REVERSE_DUP database
-        let txn = env.begin_rw_txn().unwrap();
+        let txn = env.begin_rw_sync().unwrap();
         let db = txn.create_db(None, DatabaseFlags::DUP_SORT | DatabaseFlags::REVERSE_DUP).unwrap();
         let mut cursor = txn.cursor(db).unwrap();
 
@@ -1303,7 +1117,7 @@ mod append_debug_tests {
         txn.commit().unwrap();
 
         // Verify data was written
-        let txn = env.begin_ro_txn().unwrap();
+        let txn = env.begin_ro_sync().unwrap();
         let db = txn.open_db(None).unwrap();
         let mut cursor = txn.cursor(db).unwrap();
 
@@ -1321,7 +1135,7 @@ mod append_debug_tests {
         let env = Environment::builder().open(dir.path()).unwrap();
 
         // Create REVERSE_DUP database
-        let txn = env.begin_rw_txn().unwrap();
+        let txn = env.begin_rw_sync().unwrap();
         let db = txn.create_db(None, DatabaseFlags::DUP_SORT | DatabaseFlags::REVERSE_DUP).unwrap();
         let mut cursor = txn.cursor(db).unwrap();
 

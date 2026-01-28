@@ -10,7 +10,7 @@
 //! - Creating and managing memory-mapped database environments
 //! - Performing transactional read and write operations
 //! - Iterating over key-value pairs with cursors
-//! - Custom serialization via the [`TableObject`] trait
+//! - Custom deserialization via the [`TableObject`] trait
 //!
 //! # Quick Start
 //!
@@ -34,13 +34,13 @@
 //!         .open(Path::new("/tmp/my_database"))?;
 //!
 //!     // Write data in a read-write transaction
-//!     let txn = env.begin_rw_txn()?;
+//!     let txn = env.begin_rw_sync()?;
 //!     let db = txn.create_db(None, DatabaseFlags::empty())?;
 //!     txn.put(db, b"hello", b"world", WriteFlags::empty())?;
 //!     txn.commit()?;
 //!
 //!     // Read data in a read-only transaction
-//!     let txn = env.begin_ro_txn()?;
+//!     let txn = env.begin_ro_sync()?;
 //!     let db = txn.open_db(None)?;
 //!     let value: Option<Vec<u8>> = txn.get(db.dbi(), b"hello").expect("read failed");
 //!     assert_eq!(value.as_deref(), Some(b"world".as_slice()));
@@ -48,6 +48,21 @@
 //!     Ok(())
 //! }
 //! ```
+//! # Imports
+//!
+//! For most use cases, import from the crate root:
+//! ```rust,ignore
+//! use signet_libmdbx::{Environment, DatabaseFlags, WriteFlags, Geometry, MdbxResult};
+//! ```
+//!
+//! Transaction and cursor types are returned from `Environment` and transaction
+//! methods - you rarely need to import them directly.
+//!
+//! For advanced usage, import from submodules:
+//! - [`tx`] - Transaction type aliases (`RoTxSync`, `RwTxUnsync`, etc.) and
+//!   cursor type aliases
+//! - [`tx::iter`] - Iterator types for cursor iteration
+//! - [`sys`] - Environment internals (`EnvironmentKind`, `PageSize`, etc.)
 //!
 //! # Key Concepts
 //!
@@ -59,23 +74,17 @@
 //!       threads.
 //!     - Unsynchronized transactions (`TxUnsync`) offer better
 //!       performance for single-threaded use cases.
-//! - [`RO`] and [`RW`] - Marker types indicating read-only (`RO`) or
-//!   read-write (`RW`) transactions.
+//! - [`Ro`] and [`Rw`] - Marker types indicating read-only (`Ro`) or
+//!   read-write (`Rw`) transactions.
+//!     - These also exist in sync flavors: [`RoSync`] and [`RwSync`].
 //! - [`Database`] - A named or unnamed key-value store within an environment.
-//!   - Opened with [`TxSync::open_db()`] or [`TxUnsync::open_db()`].
-//!   - Created with [`TxSync::create_db()`] or [`TxUnsync::create_db()`].
+//!   - Accessed with [`Tx::open_db`].
+//!   - or created via [`Tx::create_db`].
 //! - [`Cursor`]: Enables iteration and positioned access within a database.
 //!   Created via [`TxSync::cursor()`] or [`TxUnsync::cursor()`].
 //!
-//! # Feature Flags
-//!
-//! - `return-borrowed`: When enabled, iterators return borrowed data
-//!   (`Cow::Borrowed`) whenever possible, avoiding allocations. This is faster
-//!   but the data may change if the transaction modifies it later, which could
-//!   trigger undefined behavior. When disabled (default), dirty pages in write
-//!   transactions trigger copies for safety.
-//! - `read-tx-timeouts`: Enables automatic timeout handling for read
-//!   transactions that block writers. Useful for detecting stuck readers.
+//! [`Tx::open_db`]: crate::tx::Tx::open_db
+//! [`Tx::create_db`]: crate::tx::Tx::create_db
 //!
 //! # Custom Zero-copy Deserialization with [`TableObject`]
 //!
@@ -124,23 +133,6 @@
 //! [libmdbx]: https://github.com/erthink/libmdbx
 //! [reth-libmdbx]: https://github.com/paradigmxyz/reth
 //! [lmdb-rs]: https://github.com/mozilla/lmdb-rs
-//!
-//! # Imports
-//!
-//! For most use cases, import from the crate root:
-//! ```rust,ignore
-//! use signet_libmdbx::{Environment, DatabaseFlags, WriteFlags, Geometry, MdbxResult};
-//! ```
-//!
-//! Transaction and cursor types are returned from `Environment` and transaction
-//! methods - you rarely need to import them directly.
-//!
-//! For advanced usage, import from submodules:
-//! - [`tx`] - Transaction type aliases (`RoTxSync`, `RwTxUnsync`, etc.) and
-//!   cursor type aliases
-//! - [`tx::iter`] - Iterator types for cursor iteration
-//! - [`sys`] - Environment internals (`EnvironmentKind`, `PageSize`, etc.)
-//!
 
 #![warn(
     missing_copy_implementations,
@@ -158,10 +150,6 @@ pub extern crate signet_mdbx_sys as ffi;
 
 mod codec;
 pub use codec::{ObjectLength, TableObject, TableObjectOwned};
-
-#[cfg(feature = "read-tx-timeouts")]
-pub use crate::sys::read_transactions::MaxReadTransactionDuration;
-
 mod error;
 pub use error::{MdbxError, MdbxResult, ReadError, ReadResult};
 
@@ -172,7 +160,9 @@ pub mod sys;
 pub use sys::{Environment, EnvironmentBuilder, Geometry, Info, Stat};
 
 pub mod tx;
-pub use tx::{CommitLatency, Cursor, Database, RO, RW, TransactionKind, TxSync, TxUnsync};
+pub use tx::{
+    CommitLatency, Cursor, Database, Ro, RoSync, Rw, RwSync, TransactionKind, TxSync, TxUnsync,
+};
 
 #[cfg(test)]
 mod test {
@@ -200,7 +190,7 @@ mod test {
         for height in 0..1000 {
             let mut value = [0u8; 8];
             LittleEndian::write_u64(&mut value, height);
-            let tx = env.begin_rw_txn().expect("begin_rw_txn");
+            let tx = env.begin_rw_sync().expect("begin_rw_sync");
             let index = tx.create_db(None, DatabaseFlags::DUP_SORT).expect("open index db");
             tx.put(index, HEIGHT_KEY, value, WriteFlags::empty()).expect("tx.put");
             tx.commit().expect("tx.commit");

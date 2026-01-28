@@ -54,12 +54,12 @@ pub unsafe fn create_rw_raw(env: *mut MDBX_env) -> *mut MDBX_txn {
 
 /// Create a read-only synchronized transaction.
 pub fn create_ro_sync(env: &Environment) -> RoTxSync {
-    env.begin_ro_txn().unwrap()
+    env.begin_ro_sync().unwrap()
 }
 
 /// Create a read-write synchronized transaction.
 pub fn create_rw_sync(env: &Environment) -> RwTxSync {
-    env.begin_rw_txn().unwrap()
+    env.begin_rw_sync().unwrap()
 }
 
 // Unsync transaction utilities
@@ -80,7 +80,7 @@ pub fn setup_bench_db(num_rows: u32) -> (TempDir, Environment) {
     let env = Environment::builder().set_max_dbs(2).open(dir.path()).unwrap();
 
     {
-        let txn = env.begin_rw_txn().unwrap();
+        let txn = env.begin_rw_unsync().unwrap();
         let db = txn.open_db(None).unwrap();
         for i in 0..num_rows {
             txn.put(db, get_key(i), get_data(i), WriteFlags::empty()).unwrap();

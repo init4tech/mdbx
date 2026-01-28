@@ -23,21 +23,26 @@ fn bench_get_rand_raw(c: &mut Criterion) {
     let mut key_val: MDBX_val = MDBX_val { iov_len: 0, iov_base: ptr::null_mut() };
     let mut data_val: MDBX_val = MDBX_val { iov_len: 0, iov_base: ptr::null_mut() };
 
+    let txn: *mut MDBX_txn = unsafe {
+        let mut txn: *mut MDBX_txn = ptr::null_mut();
+        env.with_raw_env_ptr(|env_ptr| {
+            txn = create_ro_raw(env_ptr);
+        });
+        txn
+    };
+
     c.bench_function("transaction::get::rand::raw", |b| {
         b.iter(|| unsafe {
-            txn.txn_execute(|txn| {
-                let mut i = 0;
-                for key in &keys {
-                    key_val.iov_len = key.len();
-                    key_val.iov_base = key.as_bytes().as_ptr().cast_mut().cast();
+            let mut i = 0;
+            for key in &keys {
+                key_val.iov_len = key.len();
+                key_val.iov_base = key.as_bytes().as_ptr().cast_mut().cast();
 
-                    mdbx_get(txn, dbi, &raw const key_val, &raw mut data_val);
+                mdbx_get(txn, dbi, &raw const key_val, &raw mut data_val);
 
-                    i += key_val.iov_len;
-                }
-                black_box(i);
-            })
-            .unwrap();
+                i += key_val.iov_len;
+            }
+            black_box(i);
         })
     });
 }
@@ -65,7 +70,7 @@ fn bench_get_rand_sync(c: &mut Criterion) {
 fn bench_get_rand_unsync(c: &mut Criterion) {
     let n = 100u32;
     let (_dir, env) = setup_bench_db(n);
-    let mut txn = create_ro_unsync(&env);
+    let txn = create_ro_unsync(&env);
     let db = txn.open_db(None).unwrap();
 
     let mut keys: Vec<String> = (0..n).map(get_key).collect();
@@ -83,30 +88,6 @@ fn bench_get_rand_unsync(c: &mut Criterion) {
 }
 
 // PUT
-
-fn bench_put_rand_sync(c: &mut Criterion) {
-    let n = 100u32;
-    let (_dir, env) = setup_bench_db(0);
-
-    let mut items: Vec<(String, String)> = (0..n).map(|n| (get_key(n), get_data(n))).collect();
-    items.shuffle(&mut StdRng::from_seed(Default::default()));
-
-    c.bench_function("transaction::put::rand", |b| {
-        b.iter_batched(
-            || {
-                let txn = create_rw_sync(&env);
-                let db = txn.open_db(None).unwrap();
-                (txn, db)
-            },
-            |(txn, db)| {
-                for (key, data) in &items {
-                    txn.put(db, key, data, WriteFlags::empty()).unwrap();
-                }
-            },
-            criterion::BatchSize::PerIteration,
-        )
-    });
-}
 
 fn bench_put_rand_raw(c: &mut Criterion) {
     let n = 100u32;
@@ -147,6 +128,30 @@ fn bench_put_rand_raw(c: &mut Criterion) {
     });
 }
 
+fn bench_put_rand_sync(c: &mut Criterion) {
+    let n = 100u32;
+    let (_dir, env) = setup_bench_db(0);
+
+    let mut items: Vec<(String, String)> = (0..n).map(|n| (get_key(n), get_data(n))).collect();
+    items.shuffle(&mut StdRng::from_seed(Default::default()));
+
+    c.bench_function("transaction::put::rand", |b| {
+        b.iter_batched(
+            || {
+                let txn = create_rw_sync(&env);
+                let db = txn.open_db(None).unwrap();
+                (txn, db)
+            },
+            |(txn, db)| {
+                for (key, data) in &items {
+                    txn.put(db, key, data, WriteFlags::empty()).unwrap();
+                }
+            },
+            criterion::BatchSize::PerIteration,
+        )
+    });
+}
+
 fn bench_put_rand_unsync(c: &mut Criterion) {
     let n = 100u32;
     let (_dir, env) = setup_bench_db(0);
@@ -157,11 +162,11 @@ fn bench_put_rand_unsync(c: &mut Criterion) {
     c.bench_function("transaction::put::rand::single_thread", |b| {
         b.iter_batched(
             || {
-                let mut txn = create_rw_unsync(&env);
+                let txn = create_rw_unsync(&env);
                 let db = txn.open_db(None).unwrap();
                 (txn, db)
             },
-            |(mut txn, db)| {
+            |(txn, db)| {
                 for (key, data) in &items {
                     txn.put(db, key, data, WriteFlags::empty()).unwrap();
                 }

@@ -20,10 +20,10 @@
 //!   [`TableObject<'tx>`](crate::TableObject). This can avoid allocations
 //!   when using `Cow<'tx, [u8]>`.
 //!
-//! - [`owned_next()`](Iter::owned_next): Returns owned data. Requires
+//! - [`next_owned()`](Iter::next_owned): Returns owned data. Requires
 //!   [`TableObjectOwned`]. Always safe but may allocate.
 //!
-//! The standard [`Iterator`] trait is implemented via `owned_next()`.
+//! The standard [`Iterator`] trait is implemented via `next_owned()`.
 //!
 //! # Dirty Page Handling
 //!
@@ -57,7 +57,9 @@
 
 use crate::{
     Cursor, MdbxError, ReadResult, TableObject, TableObjectOwned, TransactionKind,
-    error::mdbx_result, tx::TxPtrAccess,
+    entries::{KvOpt, KvView},
+    error::mdbx_result,
+    tx::TxPtrAccess,
 };
 use std::{borrow::Cow, marker::PhantomData, ptr};
 
@@ -100,7 +102,7 @@ pub struct Iter<
 > {
     cursor: Cow<'cur, Cursor<'tx, K, A>>,
     /// Pre-fetched value from cursor positioning, yielded before calling FFI.
-    pending: Option<(Key, Value)>,
+    pending: KvOpt<'tx, A, Key, Value>,
     /// When true, the iterator is exhausted and will always return `None`.
     exhausted: bool,
     _marker: PhantomData<fn() -> (Key, Value)>,
@@ -150,19 +152,28 @@ where
 
     /// Create a new iterator from the given cursor, first yielding the
     /// provided key/value pair.
-    pub(crate) fn new_with(cursor: Cow<'cur, Cursor<'tx, K, A>>, first: (Key, Value)) -> Self {
+    pub(crate) fn new_with(
+        cursor: Cow<'cur, Cursor<'tx, K, A>>,
+        first: KvView<'tx, A, Key, Value>,
+    ) -> Self {
         Iter { cursor, pending: Some(first), exhausted: false, _marker: PhantomData }
     }
 
     /// Create a new iterator from a mutable reference to the given cursor,
     /// first yielding the provided key/value pair.
-    pub(crate) fn from_ref_with(cursor: &'cur mut Cursor<'tx, K, A>, first: (Key, Value)) -> Self {
+    pub(crate) fn from_ref_with(
+        cursor: &'cur mut Cursor<'tx, K, A>,
+        first: KvView<'tx, A, Key, Value>,
+    ) -> Self {
         Self::new_with(Cow::Borrowed(cursor), first)
     }
 
     /// Create a new iterator from an owned cursor, first yielding the
     /// provided key/value pair.
-    pub(crate) fn from_owned_with(cursor: Cursor<'tx, K, A>, first: (Key, Value)) -> Self
+    pub(crate) fn from_owned_with(
+        cursor: Cursor<'tx, K, A>,
+        first: KvView<'tx, A, Key, Value>,
+    ) -> Self
     where
         A: Sized,
     {
@@ -170,7 +181,7 @@ where
     }
 }
 
-impl<K, A, Key, Value, const OP: u32> Iter<'_, '_, K, A, Key, Value, OP>
+impl<'tx, K, A, Key, Value, const OP: u32> Iter<'tx, '_, K, A, Key, Value, OP>
 where
     K: TransactionKind,
     A: TxPtrAccess,
@@ -178,14 +189,15 @@ where
     Value: TableObjectOwned,
 {
     /// Own the next key/value pair from the iterator.
-    pub fn owned_next(&mut self) -> ReadResult<Option<(Key, Value)>> {
+    pub fn next_owned(&mut self) -> ReadResult<Option<(Key, Value)>> {
         if self.exhausted {
             return Ok(None);
         }
-        if let Some(v) = self.pending.take() {
-            return Ok(Some(v));
+        if let Some((k, v)) = self.pending.take() {
+            return Ok(Some((k.into_owned(), v.into_owned())));
         }
-        self.execute_op()
+
+        Ok(self.execute_op()?.map(|(k, v)| (k.into_owned(), v.into_owned())))
     }
 }
 
@@ -200,11 +212,12 @@ where
     ///
     /// Returns `Ok(Some((key, value)))` if a key/value pair was found,
     /// `Ok(None)` if no more key/value pairs are available, or `Err` on error.
-    fn execute_op(&self) -> ReadResult<Option<(Key, Value)>> {
+    fn execute_op(&self) -> ReadResult<KvOpt<'tx, A, Key, Value>> {
         let mut key = ffi::MDBX_val { iov_len: 0, iov_base: ptr::null_mut() };
         let mut data = ffi::MDBX_val { iov_len: 0, iov_base: ptr::null_mut() };
 
-        self.cursor.access().with_txn_ptr(|txn| {
+        let access = self.cursor.access();
+        access.with_txn_ptr(|txn| {
             let res =
                 unsafe { ffi::mdbx_cursor_get(self.cursor.cursor(), &mut key, &mut data, OP) };
 
@@ -213,8 +226,8 @@ where
                     // SAFETY: decode_val checks for dirty writes and copies if needed.
                     // The lifetime 'tx guarantees the Cow cannot outlive the transaction.
                     unsafe {
-                        let key = TableObject::decode_val::<K>(txn, key)?;
-                        let data = TableObject::decode_val::<K>(txn, data)?;
+                        let key = TableObject::decode_val::<A>(access, txn, key)?;
+                        let data = TableObject::decode_val::<A>(access, txn, data)?;
                         Ok(Some((key, data)))
                     }
                 }
@@ -229,7 +242,7 @@ where
     /// Returns `Ok(Some((key, value)))` if a key/value pair was found,
     /// `Ok(None)` if no more key/value pairs are available, or `Err` on DB
     /// access error.
-    pub fn borrow_next(&mut self) -> ReadResult<Option<(Key, Value)>> {
+    pub fn borrow_next(&mut self) -> ReadResult<KvOpt<'tx, A, Key, Value>> {
         if self.exhausted {
             return Ok(None);
         }
@@ -240,7 +253,7 @@ where
     }
 }
 
-impl<K, A, Key, Value, const OP: u32> Iterator for Iter<'_, '_, K, A, Key, Value, OP>
+impl<'tx, K, A, Key, Value, const OP: u32> Iterator for Iter<'tx, '_, K, A, Key, Value, OP>
 where
     K: TransactionKind,
     A: TxPtrAccess,
@@ -250,7 +263,7 @@ where
     type Item = ReadResult<(Key, Value)>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.owned_next().transpose()
+        self.next_owned().transpose()
     }
 }
 
@@ -305,13 +318,19 @@ where
 
     /// Create a new iterator from the given cursor, the inner iterator will
     /// first yield the provided key/value pair.
-    pub(crate) fn new_with(cursor: Cow<'cur, Cursor<'tx, K, A>>, first: (Key, Value)) -> Self {
+    pub(crate) fn new_with(
+        cursor: Cow<'cur, Cursor<'tx, K, A>>,
+        first: KvView<'tx, A, Key, Value>,
+    ) -> Self {
         IterDup { inner: Iter::new_with(cursor, first) }
     }
 
     /// Create a new iterator from a mutable reference to the given cursor,
     /// first yielding the provided key/value pair.
-    pub fn from_ref_with(cursor: &'cur mut Cursor<'tx, K, A>, first: (Key, Value)) -> Self {
+    pub fn from_ref_with(
+        cursor: &'cur mut Cursor<'tx, K, A>,
+        first: KvView<'tx, A, Key, Value>,
+    ) -> Self {
         Self::new_with(Cow::Borrowed(cursor), first)
     }
 
@@ -386,7 +405,7 @@ where
     Value: TableObjectOwned,
 {
     /// Own the next key/value pair from the iterator.
-    pub fn owned_next(&mut self) -> ReadResult<Option<IterDupVals<'tx, 'cur, K, A, Key, Value>>> {
+    pub fn next_owned(&mut self) -> ReadResult<Option<IterDupVals<'tx, 'cur, K, A, Key, Value>>> {
         self.borrow_next()
     }
 }
@@ -401,7 +420,7 @@ where
     type Item = ReadResult<IterDupVals<'tx, 'cur, K, A, Key, Value>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.owned_next().transpose()
+        self.next_owned().transpose()
     }
 }
 

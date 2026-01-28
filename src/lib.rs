@@ -42,7 +42,7 @@
 //!     // Read data in a read-only transaction
 //!     let txn = env.begin_ro_txn()?;
 //!     let db = txn.open_db(None)?;
-//!     let value: Option<Vec<u8>> = txn.get(db.dbi(), b"hello").expect("read failed");
+//!     let value: Option<Vec<u8>> = txn.get_owned(db.dbi(), b"hello").expect("read failed");
 //!     assert_eq!(value.as_deref(), Some(b"world".as_slice()));
 //!
 //!     Ok(())
@@ -66,6 +66,47 @@
 //!   - Created with [`TxSync::create_db()`] or [`TxUnsync::create_db()`].
 //! - [`Cursor`]: Enables iteration and positioned access within a database.
 //!   Created via [`TxSync::cursor()`] or [`TxUnsync::cursor()`].
+//!
+//! # Owned vs Borrowed APIs
+//!
+//! This crate provides two styles of read operations:
+//!
+//! - **Owned methods** (e.g., `get_owned`, `first_owned`, `owned_next`) return
+//!   data directly. Use these by default.
+//! - **Borrowed methods** (e.g., `get`, `first`, `borrow_next`) return
+//!   [`TxView`] wrappers that require validity checks before access.
+//!
+//! **We recommend using `_owned` methods unless zero-copy deserialization is
+//! strictly required.** The `_owned` variants:
+//! - Return data directly without wrapper types
+//! - Produce simpler, more readable code
+//! - Allow data to safely outlive the transaction
+//!
+//! Non-owned methods return [`TxView`], which guards borrowed data against
+//! transaction timeouts (when `read-tx-timeouts` is enabled). While safe, this
+//! can make code unwieldy:
+//!
+//! ```ignore
+//! // With TxView (non-owned) - requires unwrapping
+//! let view = cursor.first()?;
+//! if let Some((key, value)) = view {
+//!     let k = key.try_get()?;
+//!     let v = value.try_get()?;
+//!     // use k, v...
+//! }
+//!
+//! // With owned - direct access
+//! let pair = cursor.first_owned::<Vec<u8>, Vec<u8>>()?;
+//! if let Some((key, value)) = pair {
+//!     // use key, value directly...
+//! }
+//! ```
+//!
+//! Use non-owned methods only when:
+//! - You need zero-copy deserialization for performance
+//! - Data will be used briefly within the transaction scope
+//! - You're implementing [`TableObject`] with borrowed data (e.g., `Cow<'a,
+//!   [u8]>`)
 //!
 //! # Feature Flags
 //!
@@ -156,8 +197,8 @@
 
 pub extern crate signet_mdbx_sys as ffi;
 
-mod codec;
-pub use codec::{ObjectLength, TableObject, TableObjectOwned};
+pub mod entries;
+pub use entries::{ObjectLength, TableObject, TableObjectOwned, TxView};
 
 #[cfg(feature = "read-tx-timeouts")]
 pub use crate::sys::read_transactions::MaxReadTransactionDuration;

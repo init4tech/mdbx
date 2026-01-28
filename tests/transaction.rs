@@ -3,7 +3,6 @@ mod common;
 use common::{TestRoTxn, TestRwTxn, V1Factory, V2Factory};
 use signet_libmdbx::*;
 use std::{
-    borrow::Cow,
     io::Write,
     sync::{Arc, Barrier},
     thread::{self, JoinHandle},
@@ -33,13 +32,13 @@ fn test_put_get_del_impl<RwTx, RoTx>(
 
     let mut txn = begin_rw(&env).unwrap();
     let db = txn.open_db(None).unwrap();
-    assert_eq!(txn.get(db.dbi(), b"key1").unwrap(), Some(*b"val1"));
-    assert_eq!(txn.get(db.dbi(), b"key2").unwrap(), Some(*b"val2"));
-    assert_eq!(txn.get(db.dbi(), b"key3").unwrap(), Some(*b"val3"));
-    assert_eq!(txn.get::<()>(db.dbi(), b"key").unwrap(), None);
+    assert_eq!(txn.get::<[u8; 4]>(db.dbi(), b"key1").unwrap(), Some(*b"val1"));
+    assert_eq!(txn.get::<[u8; 4]>(db.dbi(), b"key2").unwrap(), Some(*b"val2"));
+    assert_eq!(txn.get::<[u8; 4]>(db.dbi(), b"key3").unwrap(), Some(*b"val3"));
+    assert_eq!(txn.get::<[u8; 4]>(db.dbi(), b"key").unwrap(), None);
 
     txn.del(db, b"key1", None).unwrap();
-    assert_eq!(txn.get::<()>(db.dbi(), b"key1").unwrap(), None);
+    assert_eq!(txn.get::<[u8; 4]>(db.dbi(), b"key1").unwrap(), None);
 }
 
 #[test]
@@ -128,14 +127,14 @@ fn test_put_get_del_empty_key_impl<RwTx, RoTx>(
     let mut txn = begin_rw(&env).unwrap();
     let db = txn.create_db(None, Default::default()).unwrap();
     txn.put(db, b"", b"hello", WriteFlags::empty()).unwrap();
-    assert_eq!(txn.get(db.dbi(), b"").unwrap(), Some(*b"hello"));
+    assert_eq!(txn.get::<[u8; 5]>(db.dbi(), b"").unwrap(), Some(*b"hello"));
     txn.commit().unwrap();
 
     let mut txn = begin_rw(&env).unwrap();
     let db = txn.open_db(None).unwrap();
-    assert_eq!(txn.get(db.dbi(), b"").unwrap(), Some(*b"hello"));
+    assert_eq!(txn.get::<[u8; 5]>(db.dbi(), b"").unwrap(), Some(*b"hello"));
     txn.put(db, b"", b"", WriteFlags::empty()).unwrap();
-    assert_eq!(txn.get(db.dbi(), b"").unwrap(), Some(*b""));
+    assert_eq!(txn.get::<[u8; 0]>(db.dbi(), b"").unwrap(), Some([]));
 }
 
 #[test]
@@ -503,11 +502,11 @@ fn test_reserve_v1() {
 
     let txn = env.begin_rw_txn().unwrap();
     let db = txn.open_db(None).unwrap();
-    assert_eq!(txn.get(db.dbi(), b"key1").unwrap(), Some(*b"val1"));
-    assert_eq!(txn.get::<()>(db.dbi(), b"key").unwrap(), None);
+    assert_eq!(txn.get_owned::<[u8; 4]>(db.dbi(), b"key1").unwrap(), Some(*b"val1"));
+    assert_eq!(txn.get_owned::<[u8; 4]>(db.dbi(), b"key").unwrap(), None);
 
     txn.del(db, b"key1", None).unwrap();
-    assert_eq!(txn.get::<()>(db.dbi(), b"key1").unwrap(), None);
+    assert_eq!(txn.get_owned::<[u8; 4]>(db.dbi(), b"key1").unwrap(), None);
 }
 
 /// Test reserve - V2 version
@@ -529,11 +528,11 @@ fn test_reserve_v2() {
 
     let mut txn = env.begin_rw_unsync().unwrap();
     let db = txn.open_db(None).unwrap();
-    assert_eq!(txn.get(db.dbi(), b"key1").unwrap(), Some(*b"val1"));
-    assert_eq!(txn.get::<()>(db.dbi(), b"key").unwrap(), None);
+    assert_eq!(txn.get_owned::<[u8; 4]>(db.dbi(), b"key1").unwrap(), Some(*b"val1"));
+    assert_eq!(txn.get_owned::<[u8; 4]>(db.dbi(), b"key").unwrap(), None);
 
     txn.del(db, b"key1", None).unwrap();
-    assert_eq!(txn.get::<()>(db.dbi(), b"key1").unwrap(), None);
+    assert_eq!(txn.get_owned::<[u8; 4]>(db.dbi(), b"key1").unwrap(), None);
 }
 
 /// Test nested transactions - V1 only (V2 doesn't support nested txns)
@@ -550,13 +549,13 @@ fn test_nested_txn() {
         let nested = txn.begin_nested_txn().unwrap();
         let db = nested.open_db(None).unwrap();
         nested.put(db, b"key2", b"val2", WriteFlags::empty()).unwrap();
-        assert_eq!(nested.get(db.dbi(), b"key1").unwrap(), Some(*b"val1"));
-        assert_eq!(nested.get(db.dbi(), b"key2").unwrap(), Some(*b"val2"));
+        assert_eq!(nested.get_owned::<[u8; 4]>(db.dbi(), b"key1").unwrap(), Some(*b"val1"));
+        assert_eq!(nested.get_owned::<[u8; 4]>(db.dbi(), b"key2").unwrap(), Some(*b"val2"));
     }
 
     let db = txn.open_db(None).unwrap();
-    assert_eq!(txn.get(db.dbi(), b"key1").unwrap(), Some(*b"val1"));
-    assert_eq!(txn.get::<()>(db.dbi(), b"key2").unwrap(), None);
+    assert_eq!(txn.get_owned::<[u8; 4]>(db.dbi(), b"key1").unwrap(), Some(*b"val1"));
+    assert_eq!(txn.get_owned::<[u8; 4]>(db.dbi(), b"key2").unwrap(), None);
 }
 
 /// Test concurrent readers with single writer - V1 only (V2 is !Sync)
@@ -580,14 +579,14 @@ fn test_concurrent_readers_single_writer() {
             {
                 let txn = reader_env.begin_ro_txn().unwrap();
                 let db = txn.open_db(None).unwrap();
-                assert_eq!(txn.get::<()>(db.dbi(), key).unwrap(), None);
+                assert_eq!(txn.get_owned::<[u8; 3]>(db.dbi(), key).unwrap(), None);
             }
             reader_barrier.wait();
             reader_barrier.wait();
             {
                 let txn = reader_env.begin_ro_txn().unwrap();
                 let db = txn.open_db(None).unwrap();
-                txn.get::<[u8; 3]>(db.dbi(), key).unwrap().unwrap() == *val
+                txn.get_owned::<[u8; 3]>(db.dbi(), key).unwrap().unwrap() == *val
             }
         }));
     }
@@ -633,8 +632,8 @@ fn test_concurrent_writers() {
 
     for i in 0..n {
         assert_eq!(
-            Cow::<Vec<u8>>::Owned(format!("{val}{i}").into_bytes()),
-            txn.get(db.dbi(), format!("{key}{i}").as_bytes()).unwrap().unwrap()
+            format!("{val}{i}").into_bytes(),
+            txn.get_owned::<Vec<u8>>(db.dbi(), format!("{key}{i}").as_bytes()).unwrap().unwrap()
         );
     }
 }

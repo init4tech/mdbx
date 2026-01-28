@@ -1,5 +1,9 @@
+//! Cursor for navigating database items.
+
 use crate::{
-    Database, MdbxError, RW, ReadResult, TableObject, TransactionKind, codec_try_optional,
+    Database, MdbxError, RW, ReadResult, TableObject, TableObjectOwned, TransactionKind, TxView,
+    codec_try_optional,
+    entries::KvOpt,
     error::{MdbxResult, mdbx_result},
     flags::*,
     tx::{
@@ -14,6 +18,69 @@ use ffi::{
     MDBX_SET_KEY, MDBX_SET_LOWERBOUND, MDBX_SET_RANGE, MDBX_cursor_op,
 };
 use std::{ffi::c_void, fmt, marker::PhantomData, ptr};
+
+/// Helper struct to make [`Cursor::get`] return values more readable.
+/// The meaning of the flag is operation-dependent and corresponds to
+/// `MDBX_RESULT_TRUE` (true) and `MDBX_RESULT_SUCCESS` (false).
+///
+/// Typically, `true` indicates that no matching item was found, or for range/
+/// bound operations that an inexact match was found.
+struct FlaggedGet<'a, A, Key, Value>
+where
+    A: TxPtrAccess,
+    Key: TableObject<'a>,
+    Value: TableObject<'a>,
+{
+    pub mdbx_result: bool,
+    pub key: Option<TxView<'a, A, Key>>,
+    pub value: TxView<'a, A, Value>,
+}
+
+/// Helper struct to make [`Cursor`] return values more readable.
+/// The meaning of the flag is operation-dependent and corresponds to
+/// `MDBX_RESULT_TRUE` (true) and `MDBX_RESULT_SUCCESS` (false).
+///
+/// Typically, `true` indicates that no matching item was found, or for range/
+/// bound operations that an inexact match was found.
+#[derive(Debug)]
+pub struct FlaggedKv<'a, A, Key, Value>
+where
+    A: TxPtrAccess,
+    Key: TableObject<'a>,
+    Value: TableObject<'a>,
+{
+    /// The flag indicating the result of the cursor operation. This will
+    /// correspond to `MDBX_RESULT_TRUE` (true) or `MDBX_RESULT_SUCCESS`
+    /// (false).
+    pub mdbx_result: bool,
+    /// The key returned by the cursor operation.
+    pub key: TxView<'a, A, Key>,
+    /// The value returned by the cursor operation.
+    pub value: TxView<'a, A, Value>,
+}
+
+/// Helper struct to make [`Cursor`] return values more readable.
+/// The meaning of the flag is operation-dependent and corresponds to
+/// `MDBX_RESULT_TRUE` (true) and `MDBX_RESULT_SUCCESS` (false).
+///
+/// Typically, `true` indicates that no matching item was found, or for range/
+/// bound operations that an inexact match was found.
+#[derive(Debug)]
+pub struct FlaggedKvOpt<'a, A, Key, Value>
+where
+    A: TxPtrAccess,
+    Key: TableObject<'a>,
+    Value: TableObject<'a>,
+{
+    /// The flag indicating the result of the cursor operation. This will
+    /// correspond to `MDBX_RESULT_TRUE` (true) or `MDBX_RESULT_SUCCESS`
+    /// (false).
+    pub mdbx_result: bool,
+    /// The optional key returned by the cursor operation.
+    pub key: Option<TxView<'a, A, Key>>,
+    /// The optional value returned by the cursor operation.
+    pub value: Option<TxView<'a, A, Value>>,
+}
 
 /// A cursor for navigating the items within a database.
 ///
@@ -132,12 +199,18 @@ where
 
     /// Retrieves a key/data pair from the cursor. Depending on the cursor op,
     /// the current key may be returned.
+    ///
+    /// The boolean in the returned tuple indicates the result of the operation:
+    /// - `true` - MDBX_RESULT_TRUE was returned
+    /// - `false` - MDBX_RESULT_SUCCESS was returned
+    ///
+    /// The meaning of this boolean depends on the cursor operation used.
     fn get<Key, Value>(
         &self,
         key: Option<&[u8]>,
         data: Option<&[u8]>,
         op: MDBX_cursor_op,
-    ) -> ReadResult<(Option<Key>, Value, bool)>
+    ) -> ReadResult<FlaggedGet<'tx, A, Key, Value>>
     where
         Key: TableObject<'tx>,
         Value: TableObject<'tx>,
@@ -147,7 +220,8 @@ where
         let key_ptr = key_val.iov_base;
         let data_ptr = data_val.iov_base;
 
-        self.access.with_txn_ptr(|txn| {
+        let access = &self.access;
+        access.with_txn_ptr(|txn| {
             // SAFETY:
             // The cursor is valid as long as self is alive.
             // The transaction is also valid as long as self is alive.
@@ -155,7 +229,7 @@ where
             // transaction is alive, provided the page is not dirty.
             // decode_val checks for dirty pages and copies data if needed.
             unsafe {
-                let v = mdbx_result(ffi::mdbx_cursor_get(
+                let mdbx_result = mdbx_result(ffi::mdbx_cursor_get(
                     self.cursor,
                     &mut key_val,
                     &mut data_val,
@@ -167,11 +241,11 @@ where
                     if ptr::eq(key_ptr, key_val.iov_base) {
                         None
                     } else {
-                        Some(Key::decode_val::<K>(txn, key_val)?)
+                        Some(Key::decode_val::<A>(access, txn, key_val)?)
                     }
                 };
-                let data_out = Value::decode_val::<K>(txn, data_val)?;
-                Ok((key_out, data_out, v))
+                let data_out = Value::decode_val::<A>(access, txn, data_val)?;
+                Ok(FlaggedGet { mdbx_result, key: key_out, value: data_out })
             }
         })?
     }
@@ -181,15 +255,16 @@ where
         key: Option<&[u8]>,
         data: Option<&[u8]>,
         op: MDBX_cursor_op,
-    ) -> ReadResult<Option<Value>>
+    ) -> ReadResult<Option<TxView<'tx, A, Value>>>
     where
         Value: TableObject<'tx>,
     {
-        let (_, v, result_true) = codec_try_optional!(self.get::<(), Value>(key, data, op));
-        if result_true {
+        let output = codec_try_optional!(self.get::<(), Value>(key, data, op));
+        // If MDBX_RESULT_TRUE, no value was found.
+        if output.mdbx_result {
             return Ok(None);
         }
-        Ok(Some(v))
+        Ok(Some(output.value))
     }
 
     fn get_full<Key, Value>(
@@ -197,20 +272,23 @@ where
         key: Option<&[u8]>,
         data: Option<&[u8]>,
         op: MDBX_cursor_op,
-    ) -> ReadResult<Option<(Key, Value)>>
+    ) -> ReadResult<KvOpt<'tx, A, Key, Value>>
     where
         Key: TableObject<'tx>,
         Value: TableObject<'tx>,
     {
-        let (k, v, result_true) = codec_try_optional!(self.get(key, data, op));
-        if result_true {
+        let output = codec_try_optional!(self.get(key, data, op));
+
+        // If MDBX_RESULT_TRUE, no key/value pair was found. Thus return None.
+        if output.mdbx_result {
             return Ok(None);
         }
-        Ok(Some((k.unwrap(), v)))
+        // If we got MDBX_RESULT_SUCCESS, return the key/value pair.
+        Ok(Some((output.key.unwrap(), output.value)))
     }
 
     /// Position at first key/data item.
-    pub fn first<Key, Value>(&mut self) -> ReadResult<Option<(Key, Value)>>
+    pub fn first<Key, Value>(&mut self) -> ReadResult<KvOpt<'tx, A, Key, Value>>
     where
         Key: TableObject<'tx>,
         Value: TableObject<'tx>,
@@ -222,7 +300,7 @@ where
     ///
     /// Returns [`MdbxError::RequiresDupSort`] if the database does not have the
     /// [`DatabaseFlags::DUP_SORT`] flag set.
-    pub fn first_dup<Value>(&mut self) -> ReadResult<Option<Value>>
+    pub fn first_dup<Value>(&mut self) -> ReadResult<Option<TxView<'tx, A, Value>>>
     where
         Value: TableObject<'tx>,
     {
@@ -234,7 +312,11 @@ where
     ///
     /// Returns [`MdbxError::RequiresDupSort`] if the database does not have the
     /// [`DatabaseFlags::DUP_SORT`] flag set.
-    pub fn get_both<Value>(&mut self, k: &[u8], v: &[u8]) -> ReadResult<Option<Value>>
+    pub fn get_both<Value>(
+        &mut self,
+        k: &[u8],
+        v: &[u8],
+    ) -> ReadResult<Option<TxView<'tx, A, Value>>>
     where
         Value: TableObject<'tx>,
     {
@@ -247,7 +329,11 @@ where
     ///
     /// Returns [`MdbxError::RequiresDupSort`] if the database does not have the
     /// [`DatabaseFlags::DUP_SORT`] flag set.
-    pub fn get_both_range<Value>(&mut self, k: &[u8], v: &[u8]) -> ReadResult<Option<Value>>
+    pub fn get_both_range<Value>(
+        &mut self,
+        k: &[u8],
+        v: &[u8],
+    ) -> ReadResult<Option<TxView<'tx, A, Value>>>
     where
         Value: TableObject<'tx>,
     {
@@ -256,7 +342,7 @@ where
     }
 
     /// Return key/data at current cursor position.
-    pub fn get_current<Key, Value>(&mut self) -> ReadResult<Option<(Key, Value)>>
+    pub fn get_current<Key, Value>(&mut self) -> ReadResult<KvOpt<'tx, A, Key, Value>>
     where
         Key: TableObject<'tx>,
         Value: TableObject<'tx>,
@@ -269,7 +355,7 @@ where
     ///
     /// Returns [`MdbxError::RequiresDupFixed`] if the database does not have the
     /// [`DatabaseFlags::DUP_FIXED`] flag set.
-    pub fn get_multiple<Value>(&mut self) -> ReadResult<Option<Value>>
+    pub fn get_multiple<Value>(&mut self) -> ReadResult<Option<TxView<'tx, A, Value>>>
     where
         Value: TableObject<'tx>,
     {
@@ -278,7 +364,7 @@ where
     }
 
     /// Position at last key/data item.
-    pub fn last<Key, Value>(&mut self) -> ReadResult<Option<(Key, Value)>>
+    pub fn last<Key, Value>(&mut self) -> ReadResult<KvOpt<'tx, A, Key, Value>>
     where
         Key: TableObject<'tx>,
         Value: TableObject<'tx>,
@@ -290,7 +376,7 @@ where
     ///
     /// Returns [`MdbxError::RequiresDupSort`] if the database does not have the
     /// [`DatabaseFlags::DUP_SORT`] flag set.
-    pub fn last_dup<Value>(&mut self) -> ReadResult<Option<Value>>
+    pub fn last_dup<Value>(&mut self) -> ReadResult<Option<TxView<'tx, A, Value>>>
     where
         Value: TableObject<'tx>,
     {
@@ -300,7 +386,7 @@ where
 
     /// Position at next data item
     #[expect(clippy::should_implement_trait)]
-    pub fn next<Key, Value>(&mut self) -> ReadResult<Option<(Key, Value)>>
+    pub fn next<Key, Value>(&mut self) -> ReadResult<KvOpt<'tx, A, Key, Value>>
     where
         Key: TableObject<'tx>,
         Value: TableObject<'tx>,
@@ -312,7 +398,7 @@ where
     ///
     /// Returns [`MdbxError::RequiresDupSort`] if the database does not have the
     /// [`DatabaseFlags::DUP_SORT`] flag set.
-    pub fn next_dup<Key, Value>(&mut self) -> ReadResult<Option<(Key, Value)>>
+    pub fn next_dup<Key, Value>(&mut self) -> ReadResult<KvOpt<'tx, A, Key, Value>>
     where
         Key: TableObject<'tx>,
         Value: TableObject<'tx>,
@@ -326,7 +412,7 @@ where
     ///
     /// Returns [`MdbxError::RequiresDupFixed`] if the database does not have the
     /// [`DatabaseFlags::DUP_FIXED`] flag set.
-    pub fn next_multiple<Key, Value>(&mut self) -> ReadResult<Option<(Key, Value)>>
+    pub fn next_multiple<Key, Value>(&mut self) -> ReadResult<KvOpt<'tx, A, Key, Value>>
     where
         Key: TableObject<'tx>,
         Value: TableObject<'tx>,
@@ -336,7 +422,7 @@ where
     }
 
     /// Position at first data item of next key.
-    pub fn next_nodup<Key, Value>(&mut self) -> ReadResult<Option<(Key, Value)>>
+    pub fn next_nodup<Key, Value>(&mut self) -> ReadResult<KvOpt<'tx, A, Key, Value>>
     where
         Key: TableObject<'tx>,
         Value: TableObject<'tx>,
@@ -345,7 +431,7 @@ where
     }
 
     /// Position at previous data item.
-    pub fn prev<Key, Value>(&mut self) -> ReadResult<Option<(Key, Value)>>
+    pub fn prev<Key, Value>(&mut self) -> ReadResult<KvOpt<'tx, A, Key, Value>>
     where
         Key: TableObject<'tx>,
         Value: TableObject<'tx>,
@@ -357,7 +443,7 @@ where
     ///
     /// Returns [`MdbxError::RequiresDupSort`] if the database does not have the
     /// [`DatabaseFlags::DUP_SORT`] flag set.
-    pub fn prev_dup<Key, Value>(&mut self) -> ReadResult<Option<(Key, Value)>>
+    pub fn prev_dup<Key, Value>(&mut self) -> ReadResult<KvOpt<'tx, A, Key, Value>>
     where
         Key: TableObject<'tx>,
         Value: TableObject<'tx>,
@@ -367,7 +453,7 @@ where
     }
 
     /// Position at last data item of previous key.
-    pub fn prev_nodup<Key, Value>(&mut self) -> ReadResult<Option<(Key, Value)>>
+    pub fn prev_nodup<Key, Value>(&mut self) -> ReadResult<KvOpt<'tx, A, Key, Value>>
     where
         Key: TableObject<'tx>,
         Value: TableObject<'tx>,
@@ -376,7 +462,7 @@ where
     }
 
     /// Position at specified key.
-    pub fn set<Value>(&mut self, key: &[u8]) -> ReadResult<Option<Value>>
+    pub fn set<Value>(&mut self, key: &[u8]) -> ReadResult<Option<TxView<'tx, A, Value>>>
     where
         Value: TableObject<'tx>,
     {
@@ -385,7 +471,7 @@ where
     }
 
     /// Position at specified key, return both key and data.
-    pub fn set_key<Key, Value>(&mut self, key: &[u8]) -> ReadResult<Option<(Key, Value)>>
+    pub fn set_key<Key, Value>(&mut self, key: &[u8]) -> ReadResult<KvOpt<'tx, A, Key, Value>>
     where
         Key: TableObject<'tx>,
         Value: TableObject<'tx>,
@@ -395,13 +481,28 @@ where
     }
 
     /// Position at first key greater than or equal to specified key.
-    pub fn set_range<Key, Value>(&mut self, key: &[u8]) -> ReadResult<Option<(Key, Value)>>
+    ///
+    /// If an exact match is found, the [`FlaggedKvOpt::mdbx_result`]` is
+    /// `false`. If a greater key is found, it is `true`.
+    pub fn set_range<Key, Value>(
+        &mut self,
+        key: &[u8],
+    ) -> ReadResult<Option<FlaggedKv<'tx, A, Key, Value>>>
     where
         Key: TableObject<'tx>,
         Value: TableObject<'tx>,
     {
         assertions::debug_assert_integer_key(self.db.flags(), key);
-        self.get_full(Some(key), None, MDBX_SET_RANGE)
+
+        let FlaggedGet { mdbx_result, key: Some(key), value } =
+            codec_try_optional!(self.get(Some(key), None, MDBX_SET_RANGE))
+        else {
+            unreachable!(
+                "MDBX_SET_RANGE always positions cursor if DB is non-empty. Empty case is caught by codec_try_optional"
+            );
+        };
+
+        Ok(Some(FlaggedKv { mdbx_result, key, value }))
     }
 
     /// [`DatabaseFlags::DUP_FIXED`]-only: Position at previous page and return up to a page of
@@ -409,7 +510,7 @@ where
     ///
     /// Returns [`MdbxError::RequiresDupFixed`] if the database does not have the
     /// [`DatabaseFlags::DUP_FIXED`] flag set.
-    pub fn prev_multiple<Key, Value>(&mut self) -> ReadResult<Option<(Key, Value)>>
+    pub fn prev_multiple<Key, Value>(&mut self) -> ReadResult<KvOpt<'tx, A, Key, Value>>
     where
         Key: TableObject<'tx>,
         Value: TableObject<'tx>,
@@ -418,27 +519,35 @@ where
         self.get_full(None, None, MDBX_PREV_MULTIPLE)
     }
 
-    /// Position at first key-value pair greater than or equal to specified, return both key and
-    /// data, and the return code depends on an exact match.
+    /// Position at first key-value pair greater than or equal to specified,
+    /// return both key and data, and the return code depends on an exact match.
     ///
-    /// For non DupSort-ed collections this works the same as [`Self::set_range()`], but returns
-    /// [false] if key found exactly and [true] if greater key was found.
+    /// For non DupSort-ed collections this works the same as
+    /// [`Self::set_range()`], but returns `false` if key found exactly and
+    /// `true` if greater key was found.
     ///
-    /// For DupSort-ed a data value is taken into account for duplicates, i.e. for a pairs/tuples of
-    /// a key and an each data value of duplicates. Returns [false] if key-value pair found
-    /// exactly and [true] if the next pair was returned.
+    /// For DupSort-ed a data value is taken into account for duplicates, i.e.
+    /// for a pairs/tuples of a key and an each data value of duplicates.
+    ///
+    /// Returns `false` if key-value pair found exactly and `true` if the next
+    /// pair was returned.
     pub fn set_lowerbound<Key, Value>(
         &mut self,
         key: &[u8],
-    ) -> ReadResult<Option<(bool, Key, Value)>>
+    ) -> ReadResult<Option<FlaggedKv<'tx, A, Key, Value>>>
     where
         Key: TableObject<'tx>,
         Value: TableObject<'tx>,
     {
         assertions::debug_assert_integer_key(self.db.flags(), key);
-        let (k, v, found) = codec_try_optional!(self.get(Some(key), None, MDBX_SET_LOWERBOUND));
-
-        Ok(Some((found, k.unwrap(), v)))
+        let FlaggedGet { mdbx_result, key: Some(key), value } =
+            codec_try_optional!(self.get(Some(key), None, MDBX_SET_LOWERBOUND))
+        else {
+            unreachable!(
+                "MDBX_SET_LOWERBOUND always positions cursor if DB is non-empty. Empty case is caught by codec_try_optional"
+            );
+        };
+        Ok(Some(FlaggedKv { mdbx_result, key, value }))
     }
 
     /// Returns an iterator over database items.
@@ -503,6 +612,9 @@ where
 
     /// Iterate over database items starting from the given key.
     ///
+    /// This will position the cursor at the first key greater than or equal to
+    /// the given key, and begin the iteration there.
+    ///
     /// For databases with duplicate data items ([`DatabaseFlags::DUP_SORT`]),
     /// the duplicate data items of each key will be returned before moving on
     /// to the next key.
@@ -515,11 +627,13 @@ where
         Key: TableObject<'tx>,
         Value: TableObject<'tx>,
     {
-        let Some(first) = self.set_range::<Key, Value>(key)? else {
+        // We can discard the mdbx_result flag here, as the iterator is
+        // explicitly starting at or after the given key.
+        let Some(FlaggedKv { key, value, .. }) = self.set_range(key)? else {
             return Ok(Iter::end_from_ref(self));
         };
 
-        Ok(Iter::from_ref_with(self, first))
+        Ok(Iter::from_ref_with(self, (key, value)))
     }
 
     /// Iterate over duplicate database items.
@@ -576,11 +690,11 @@ where
         Key: TableObject<'tx>,
         Value: TableObject<'tx>,
     {
-        let Some(first) = self.set_range(key)? else {
+        let Some(FlaggedKv { key, value, .. }) = self.set_range(key)? else {
             return Ok(IterDup::end_from_ref(self));
         };
 
-        Ok(IterDup::from_ref_with(self, first))
+        Ok(IterDup::from_ref_with(self, (key, value)))
     }
 
     /// Iterate over the duplicates of the item in the database with the given
@@ -599,6 +713,214 @@ where
         };
 
         Ok(IterDupVals::from_ref_with(self, first))
+    }
+
+    // =========================================================================
+    // Owned variants - return owned values directly
+    // =========================================================================
+
+    /// Position at specified key, returning an owned value.
+    pub fn set_owned<Value>(&mut self, key: &[u8]) -> ReadResult<Option<Value>>
+    where
+        Value: TableObjectOwned + for<'a> TableObject<'a>,
+    {
+        self.set(key).map(|opt| opt.map(TxView::into_owned))
+    }
+
+    /// [`DatabaseFlags::DUP_SORT`]-only: Position at first data item of current key,
+    /// returning an owned value.
+    pub fn first_dup_owned<Value>(&mut self) -> ReadResult<Option<Value>>
+    where
+        Value: TableObjectOwned + for<'a> TableObject<'a>,
+    {
+        self.first_dup().map(|opt| opt.map(TxView::into_owned))
+    }
+
+    /// [`DatabaseFlags::DUP_SORT`]-only: Position at last data item of current key,
+    /// returning an owned value.
+    pub fn last_dup_owned<Value>(&mut self) -> ReadResult<Option<Value>>
+    where
+        Value: TableObjectOwned + for<'a> TableObject<'a>,
+    {
+        self.last_dup().map(|opt| opt.map(TxView::into_owned))
+    }
+
+    /// [`DatabaseFlags::DUP_SORT`]-only: Position at key/data pair, returning an owned value.
+    pub fn get_both_owned<Value>(&mut self, k: &[u8], v: &[u8]) -> ReadResult<Option<Value>>
+    where
+        Value: TableObjectOwned + for<'a> TableObject<'a>,
+    {
+        self.get_both(k, v).map(|opt| opt.map(TxView::into_owned))
+    }
+
+    /// [`DatabaseFlags::DUP_SORT`]-only: Position at given key and at first data greater
+    /// than or equal to specified data, returning an owned value.
+    pub fn get_both_range_owned<Value>(&mut self, k: &[u8], v: &[u8]) -> ReadResult<Option<Value>>
+    where
+        Value: TableObjectOwned + for<'a> TableObject<'a>,
+    {
+        self.get_both_range(k, v).map(|opt| opt.map(TxView::into_owned))
+    }
+
+    /// [`DatabaseFlags::DUP_FIXED`]-only: Return up to a page of duplicate data items,
+    /// returning an owned value.
+    pub fn get_multiple_owned<Value>(&mut self) -> ReadResult<Option<Value>>
+    where
+        Value: TableObjectOwned + for<'a> TableObject<'a>,
+    {
+        self.get_multiple().map(|opt| opt.map(TxView::into_owned))
+    }
+
+    /// Position at first key/data item, returning owned values.
+    pub fn first_owned<Key, Value>(&mut self) -> ReadResult<Option<(Key, Value)>>
+    where
+        Key: TableObjectOwned + for<'a> TableObject<'a>,
+        Value: TableObjectOwned + for<'a> TableObject<'a>,
+    {
+        self.first().map(|opt| opt.map(|(k, v)| (k.into_owned(), v.into_owned())))
+    }
+
+    /// Position at last key/data item, returning owned values.
+    pub fn last_owned<Key, Value>(&mut self) -> ReadResult<Option<(Key, Value)>>
+    where
+        Key: TableObjectOwned + for<'a> TableObject<'a>,
+        Value: TableObjectOwned + for<'a> TableObject<'a>,
+    {
+        self.last().map(|opt| opt.map(|(k, v)| (k.into_owned(), v.into_owned())))
+    }
+
+    /// Position at next data item, returning owned values.
+    pub fn next_owned<Key, Value>(&mut self) -> ReadResult<Option<(Key, Value)>>
+    where
+        Key: TableObjectOwned + for<'a> TableObject<'a>,
+        Value: TableObjectOwned + for<'a> TableObject<'a>,
+    {
+        self.next().map(|opt| opt.map(|(k, v)| (k.into_owned(), v.into_owned())))
+    }
+
+    /// Position at previous data item, returning owned values.
+    pub fn prev_owned<Key, Value>(&mut self) -> ReadResult<Option<(Key, Value)>>
+    where
+        Key: TableObjectOwned + for<'a> TableObject<'a>,
+        Value: TableObjectOwned + for<'a> TableObject<'a>,
+    {
+        self.prev().map(|opt| opt.map(|(k, v)| (k.into_owned(), v.into_owned())))
+    }
+
+    /// Return key/data at current cursor position, returning owned values.
+    pub fn get_current_owned<Key, Value>(&mut self) -> ReadResult<Option<(Key, Value)>>
+    where
+        Key: TableObjectOwned + for<'a> TableObject<'a>,
+        Value: TableObjectOwned + for<'a> TableObject<'a>,
+    {
+        self.get_current().map(|opt| opt.map(|(k, v)| (k.into_owned(), v.into_owned())))
+    }
+
+    /// Position at specified key, return both key and data as owned values.
+    pub fn set_key_owned<Key, Value>(&mut self, key: &[u8]) -> ReadResult<Option<(Key, Value)>>
+    where
+        Key: TableObjectOwned + for<'a> TableObject<'a>,
+        Value: TableObjectOwned + for<'a> TableObject<'a>,
+    {
+        self.set_key(key).map(|opt| opt.map(|(k, v)| (k.into_owned(), v.into_owned())))
+    }
+
+    /// [`DatabaseFlags::DUP_SORT`]-only: Position at next data item of current key,
+    /// returning owned values.
+    pub fn next_dup_owned<Key, Value>(&mut self) -> ReadResult<Option<(Key, Value)>>
+    where
+        Key: TableObjectOwned + for<'a> TableObject<'a>,
+        Value: TableObjectOwned + for<'a> TableObject<'a>,
+    {
+        self.next_dup().map(|opt| opt.map(|(k, v)| (k.into_owned(), v.into_owned())))
+    }
+
+    /// [`DatabaseFlags::DUP_SORT`]-only: Position at previous data item of current key,
+    /// returning owned values.
+    pub fn prev_dup_owned<Key, Value>(&mut self) -> ReadResult<Option<(Key, Value)>>
+    where
+        Key: TableObjectOwned + for<'a> TableObject<'a>,
+        Value: TableObjectOwned + for<'a> TableObject<'a>,
+    {
+        self.prev_dup().map(|opt| opt.map(|(k, v)| (k.into_owned(), v.into_owned())))
+    }
+
+    /// Position at first data item of next key, returning owned values.
+    pub fn next_nodup_owned<Key, Value>(&mut self) -> ReadResult<Option<(Key, Value)>>
+    where
+        Key: TableObjectOwned + for<'a> TableObject<'a>,
+        Value: TableObjectOwned + for<'a> TableObject<'a>,
+    {
+        self.next_nodup().map(|opt| opt.map(|(k, v)| (k.into_owned(), v.into_owned())))
+    }
+
+    /// Position at last data item of previous key, returning owned values.
+    pub fn prev_nodup_owned<Key, Value>(&mut self) -> ReadResult<Option<(Key, Value)>>
+    where
+        Key: TableObjectOwned + for<'a> TableObject<'a>,
+        Value: TableObjectOwned + for<'a> TableObject<'a>,
+    {
+        self.prev_nodup().map(|opt| opt.map(|(k, v)| (k.into_owned(), v.into_owned())))
+    }
+
+    /// [`DatabaseFlags::DUP_FIXED`]-only: Return up to a page of duplicate data items
+    /// from next cursor position, returning owned values.
+    pub fn next_multiple_owned<Key, Value>(&mut self) -> ReadResult<Option<(Key, Value)>>
+    where
+        Key: TableObjectOwned + for<'a> TableObject<'a>,
+        Value: TableObjectOwned + for<'a> TableObject<'a>,
+    {
+        self.next_multiple().map(|opt| opt.map(|(k, v)| (k.into_owned(), v.into_owned())))
+    }
+
+    /// [`DatabaseFlags::DUP_FIXED`]-only: Position at previous page and return up to a page
+    /// of duplicate data items, returning owned values.
+    pub fn prev_multiple_owned<Key, Value>(&mut self) -> ReadResult<Option<(Key, Value)>>
+    where
+        Key: TableObjectOwned + for<'a> TableObject<'a>,
+        Value: TableObjectOwned + for<'a> TableObject<'a>,
+    {
+        self.prev_multiple().map(|opt| opt.map(|(k, v)| (k.into_owned(), v.into_owned())))
+    }
+
+    /// Position at first key greater than or equal to specified key, returning
+    /// owned values with a flag indicating exact match.
+    ///
+    /// Returns a tuple of `(mdbx_result, key, value)` where `mdbx_result` is
+    /// `false` for an exact match and `true` for a greater key.
+    pub fn set_range_owned<Key, Value>(
+        &mut self,
+        key: &[u8],
+    ) -> ReadResult<Option<(bool, Key, Value)>>
+    where
+        Key: TableObjectOwned + for<'a> TableObject<'a>,
+        Value: TableObjectOwned + for<'a> TableObject<'a>,
+    {
+        self.set_range(key).map(|opt| {
+            opt.map(|flagged| {
+                (flagged.mdbx_result, flagged.key.into_owned(), flagged.value.into_owned())
+            })
+        })
+    }
+
+    /// Position at first key-value pair greater than or equal to specified,
+    /// returning owned values with a flag indicating exact match.
+    ///
+    /// Returns a tuple of `(mdbx_result, key, value)` where `mdbx_result` is
+    /// `false` for an exact match and `true` for the next pair.
+    pub fn set_lowerbound_owned<Key, Value>(
+        &mut self,
+        key: &[u8],
+    ) -> ReadResult<Option<(bool, Key, Value)>>
+    where
+        Key: TableObjectOwned + for<'a> TableObject<'a>,
+        Value: TableObjectOwned + for<'a> TableObject<'a>,
+    {
+        self.set_lowerbound(key).map(|opt| {
+            opt.map(|flagged| {
+                (flagged.mdbx_result, flagged.key.into_owned(), flagged.value.into_owned())
+            })
+        })
     }
 }
 

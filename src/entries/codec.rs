@@ -1,6 +1,10 @@
 //! Codec for deserializing database values into Rust types.
 
-use crate::{MdbxError, TransactionKind, error::ReadResult, tx::ops};
+use crate::{
+    MdbxError, TxView,
+    error::ReadResult,
+    tx::{TxPtrAccess, ops},
+};
 use ffi::MDBX_txn;
 use std::{borrow::Cow, slice};
 
@@ -139,12 +143,14 @@ pub trait TableObject<'a>: Sized {
     /// they have exclusive access to the transaction if it is read-write.
     #[doc(hidden)]
     #[inline(always)]
-    unsafe fn decode_val<K: TransactionKind>(
+    unsafe fn decode_val<A: TxPtrAccess>(
+        access: &'a A,
         tx: *const MDBX_txn,
         data_val: ffi::MDBX_val,
-    ) -> ReadResult<Self> {
-        let cow = unsafe { Cow::<'a, [u8]>::decode_val::<K>(tx, data_val)? };
-        Self::decode_borrow(cow)
+    ) -> ReadResult<TxView<'a, A, Self>> {
+        let cow = unsafe { Cow::<'a, [u8]>::decode_val::<A>(access, tx, data_val)? };
+
+        cow.flat_map(Self::decode_borrow)
     }
 }
 
@@ -154,18 +160,21 @@ impl<'a> TableObject<'a> for Cow<'a, [u8]> {
     }
 
     #[doc(hidden)]
-    unsafe fn decode_val<K: TransactionKind>(
+    unsafe fn decode_val<A: TxPtrAccess>(
+        access: &'a A,
         txn: *const MDBX_txn,
         data_val: ffi::MDBX_val,
-    ) -> ReadResult<Self> {
+    ) -> ReadResult<TxView<'a, A, Self>> {
         // SAFETY: Caller ensures the tx is active, slice is valid for lifetime
         // 'a.
         let s = unsafe { slice::from_raw_parts(data_val.iov_base as *const u8, data_val.iov_len) };
 
         // SAFETY: txn is valid from caller, data_val.iov_base points to db pages.
-        let is_dirty = (!K::IS_READ_ONLY) && unsafe { ops::is_dirty_raw(txn, data_val.iov_base) }?;
+        let is_dirty =
+            (!A::HAS_RUNTIME_CHECK) && unsafe { ops::is_dirty_raw(txn, data_val.iov_base) }?;
 
-        Ok(if is_dirty { Cow::Owned(s.to_vec()) } else { Cow::Borrowed(s) })
+        let cow = if is_dirty { Cow::Owned(s.to_vec()) } else { Cow::Borrowed(s) };
+        Ok(TxView::new(cow, access))
     }
 }
 
@@ -174,14 +183,15 @@ impl TableObject<'_> for Vec<u8> {
         Ok(data.into_owned())
     }
 
-    unsafe fn decode_val<K: TransactionKind>(
+    unsafe fn decode_val<'a, A: TxPtrAccess>(
+        access: &'a A,
         _tx: *const MDBX_txn,
         data_val: ffi::MDBX_val,
-    ) -> ReadResult<Self> {
+    ) -> ReadResult<TxView<'a, A, Self>> {
         // SAFETY: Caller ensures the tx is active, slice is valid for lifetime.
         // We always copy for Vec<u8> since we need to own the data.
         let s = unsafe { slice::from_raw_parts(data_val.iov_base as *const u8, data_val.iov_len) };
-        Ok(s.to_vec())
+        Ok(TxView::new(s.to_vec(), access))
     }
 }
 
@@ -190,11 +200,12 @@ impl<'a> TableObject<'a> for () {
         Ok(())
     }
 
-    unsafe fn decode_val<K: TransactionKind>(
+    unsafe fn decode_val<A: TxPtrAccess>(
+        access: &'a A,
         _: *const MDBX_txn,
         _: ffi::MDBX_val,
-    ) -> ReadResult<Self> {
-        Ok(())
+    ) -> ReadResult<TxView<'a, A, Self>> {
+        Ok(TxView::new((), access))
     }
 }
 
@@ -208,11 +219,12 @@ impl TableObject<'_> for ObjectLength {
         Ok(Self(data.len()))
     }
 
-    unsafe fn decode_val<K: TransactionKind>(
+    unsafe fn decode_val<'a, A: TxPtrAccess>(
+        access: &'a A,
         _tx: *const MDBX_txn,
         data_val: ffi::MDBX_val,
-    ) -> ReadResult<Self> {
-        Ok(Self(data_val.iov_len))
+    ) -> ReadResult<TxView<'a, A, Self>> {
+        Ok(TxView::new(Self(data_val.iov_len), access))
     }
 }
 
@@ -234,10 +246,11 @@ impl<'a, const LEN: usize> TableObject<'a> for [u8; LEN] {
         Ok(a)
     }
 
-    unsafe fn decode_val<K: TransactionKind>(
+    unsafe fn decode_val<A: TxPtrAccess>(
+        access: &'a A,
         _tx: *const MDBX_txn,
         data_val: ffi::MDBX_val,
-    ) -> ReadResult<Self> {
+    ) -> ReadResult<TxView<'a, A, Self>> {
         // SAFETY: Caller ensures the tx is active, slice is valid.
         if data_val.iov_len != LEN {
             return Err(MdbxError::DecodeErrorLenDiff.into());
@@ -245,6 +258,6 @@ impl<'a, const LEN: usize> TableObject<'a> for [u8; LEN] {
         let s = unsafe { slice::from_raw_parts(data_val.iov_base as *const u8, data_val.iov_len) };
         let mut a = [0; LEN];
         a[..].copy_from_slice(s);
-        Ok(a)
+        Ok(TxView::new(a, access))
     }
 }

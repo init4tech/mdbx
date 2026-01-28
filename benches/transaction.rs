@@ -55,7 +55,7 @@ fn bench_get_rand_sync(c: &mut Criterion) {
         b.iter(|| {
             let mut i = 0usize;
             for key in &keys {
-                i += *txn.get::<ObjectLength>(db.dbi(), key.as_bytes()).unwrap().unwrap();
+                i += *txn.get_owned::<ObjectLength>(db.dbi(), key.as_bytes()).unwrap().unwrap();
             }
             black_box(i);
         })
@@ -75,7 +75,7 @@ fn bench_get_rand_unsync(c: &mut Criterion) {
         b.iter(|| {
             let mut i = 0usize;
             for key in &keys {
-                i += *txn.get::<ObjectLength>(db.dbi(), key.as_bytes()).unwrap().unwrap();
+                i += *txn.get_owned::<ObjectLength>(db.dbi(), key.as_bytes()).unwrap().unwrap();
             }
             black_box(i);
         })

@@ -13,6 +13,47 @@ use std::{
     },
 };
 
+/// Guard that keeps an RO unsync transaction alive during data access.
+///
+/// This guard holds an `Arc<RoTxPtr>`, preventing the timeout thread from
+/// aborting the transaction while the guard exists. The guard is acquired
+/// via [`TxPtrAccess::try_guard`] and should be held while accessing data
+/// borrowed from the transaction.
+#[cfg(feature = "read-tx-timeouts")]
+pub struct RoTxGuard {
+    _arc: Arc<RoTxPtr>,
+}
+
+#[cfg(feature = "read-tx-timeouts")]
+impl fmt::Debug for RoTxGuard {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RoTxGuard").finish()
+    }
+}
+
+/// Guard type for RO unsync transactions when timeouts are disabled.
+///
+/// This is a zero-sized type that provides no runtime overhead.
+#[cfg(not(feature = "read-tx-timeouts"))]
+#[allow(unreachable_pub)]
+pub type RoTxGuard = ();
+
+/// Guard that keeps a sync transaction valid during data access.
+///
+/// This guard holds the transaction's mutex lock, preventing the timeout
+/// monitor from resetting the transaction while the guard exists. The guard
+/// is acquired via [`TxPtrAccess::try_guard`] and should be held while
+/// accessing data borrowed from the transaction.
+pub struct SyncTxGuard<'a> {
+    _guard: MutexGuard<'a, bool>,
+}
+
+impl fmt::Debug for SyncTxGuard<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SyncTxGuard").finish()
+    }
+}
+
 mod sealed {
     use super::*;
 
@@ -30,8 +71,35 @@ mod sealed {
 /// are stored for read-only and read-write transactions. It ensures that
 /// the transaction pointer can be accessed safely, respecting timeouts
 /// and ownership semantics.
-#[allow(unreachable_pub)]
+#[auto_impl::auto_impl(&, &mut, Box, Arc)]
 pub trait TxPtrAccess: fmt::Debug + sealed::Sealed {
+    /// Whether this access type has runtime timeout checks.
+    const HAS_RUNTIME_CHECK: bool = false;
+
+    /// Guard type that prevents transaction invalidation while held.
+    ///
+    /// For transaction types that can timeout (RO with `read-tx-timeouts`),
+    /// this holds resources that keep the transaction valid. For transaction
+    /// types that cannot timeout (RW), this is `()`.
+    type Guard<'a>
+    where
+        Self: 'a;
+
+    /// Try to acquire a guard that prevents transaction invalidation.
+    ///
+    /// Returns `Err(MdbxError::ReadTransactionTimeout)` if the transaction
+    /// has already timed out.
+    ///
+    /// The returned guard should be held while accessing data borrowed from
+    /// the transaction. While the guard exists, the transaction cannot be
+    /// invalidated by a timeout.
+    fn try_guard(&self) -> MdbxResult<Self::Guard<'_>>;
+
+    /// Check if the transaction is still valid.
+    fn valid(&self) -> bool {
+        true
+    }
+
     /// Execute a closure with the transaction pointer.
     fn with_txn_ptr<F, R>(&self, f: F) -> MdbxResult<R>
     where
@@ -76,6 +144,13 @@ impl RwUnsync {
 }
 
 impl TxPtrAccess for RwUnsync {
+    type Guard<'a> = ();
+
+    fn try_guard(&self) -> MdbxResult<Self::Guard<'_>> {
+        // RW transactions cannot timeout, so guard is always available.
+        Ok(())
+    }
+
     fn with_txn_ptr<F, R>(&self, f: F) -> MdbxResult<R>
     where
         F: FnOnce(*mut ffi::MDBX_txn) -> R,
@@ -263,6 +338,43 @@ impl RoGuard {
 }
 
 impl TxPtrAccess for RoGuard {
+    const HAS_RUNTIME_CHECK: bool = cfg!(feature = "read-tx-timeouts");
+
+    type Guard<'a> = RoTxGuard;
+
+    fn try_guard(&self) -> MdbxResult<Self::Guard<'_>> {
+        #[cfg(feature = "read-tx-timeouts")]
+        {
+            self.try_ref()
+                .map(|arc| RoTxGuard { _arc: arc })
+                .ok_or(crate::MdbxError::ReadTransactionTimeout)
+        }
+
+        #[cfg(not(feature = "read-tx-timeouts"))]
+        {
+            Ok(())
+        }
+    }
+
+    /// Check if the pointer is valid.
+    ///
+    /// # Warning:
+    ///
+    /// Relying on this method for safety is discouraged, as the transaction
+    /// may time out immediately after this check. Prefer using
+    /// `with_txn_ptr` or `try_guard` to ensure validity during access.
+    fn valid(&self) -> bool {
+        #[cfg(feature = "read-tx-timeouts")]
+        {
+            self.try_ref().is_some()
+        }
+
+        #[cfg(not(feature = "read-tx-timeouts"))]
+        {
+            true
+        }
+    }
+
     /// Execute a closure with the transaction pointer, failing if timed out.
     ///
     /// Calling this function will ensure that the transaction is still valid
@@ -501,6 +613,33 @@ impl<K: TransactionKind> PtrSyncInner<K> {
 }
 
 impl<K: TransactionKind> TxPtrAccess for PtrSyncInner<K> {
+    const HAS_RUNTIME_CHECK: bool = cfg!(feature = "read-tx-timeouts");
+
+    type Guard<'a> = SyncTxGuard<'a>;
+
+    fn try_guard(&self) -> MdbxResult<Self::Guard<'_>> {
+        let guard = self.lock();
+        // For RW transactions, timeout flag is never set, so this always succeeds.
+        // For RO transactions with timeouts, check if timed out.
+        if *guard {
+            return Err(crate::MdbxError::ReadTransactionTimeout);
+        }
+        Ok(SyncTxGuard { _guard: guard })
+    }
+
+    fn valid(&self) -> bool {
+        #[cfg(feature = "read-tx-timeouts")]
+        {
+            let timeout_flag = self.lock();
+            !*timeout_flag
+        }
+
+        #[cfg(not(feature = "read-tx-timeouts"))]
+        {
+            true
+        }
+    }
+
     fn with_txn_ptr<F, R>(&self, f: F) -> MdbxResult<R>
     where
         F: FnOnce(*mut ffi::MDBX_txn) -> R,

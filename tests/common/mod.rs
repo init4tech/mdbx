@@ -6,7 +6,7 @@
 #![allow(missing_docs, dead_code)]
 use signet_libmdbx::{
     Cursor, Database, DatabaseFlags, Environment, MdbxResult, RO, RW, ReadResult, Stat,
-    TableObject, TxSync, WriteFlags, ffi,
+    TableObject, TableObjectOwned, TxSync, WriteFlags, ffi,
     tx::{PtrSyncInner, RoGuard, RwUnsync, TxPtrAccess, unsync},
 };
 
@@ -17,8 +17,8 @@ pub trait TestRwTxn: Sized {
 
     fn create_db(&mut self, name: Option<&str>, flags: DatabaseFlags) -> MdbxResult<Database>;
     fn open_db(&mut self, name: Option<&str>) -> MdbxResult<Database>;
-    fn get<'a, T: TableObject<'a>>(
-        &'a mut self,
+    fn get<T: TableObjectOwned + for<'a> TableObject<'a>>(
+        &mut self,
         dbi: ffi::MDBX_dbi,
         key: &[u8],
     ) -> ReadResult<Option<T>>;
@@ -43,8 +43,8 @@ pub trait TestRoTxn: Sized {
     type CursorAccess: TxPtrAccess;
 
     fn open_db(&mut self, name: Option<&str>) -> MdbxResult<Database>;
-    fn get<'a, T: TableObject<'a>>(
-        &'a mut self,
+    fn get<T: TableObjectOwned + for<'a> TableObject<'a>>(
+        &mut self,
         dbi: ffi::MDBX_dbi,
         key: &[u8],
     ) -> ReadResult<Option<T>>;
@@ -68,12 +68,12 @@ impl TestRwTxn for TxSync<RW> {
         TxSync::open_db(self, name)
     }
 
-    fn get<'a, T: TableObject<'a>>(
-        &'a mut self,
+    fn get<T: TableObjectOwned + for<'a> TableObject<'a>>(
+        &mut self,
         dbi: ffi::MDBX_dbi,
         key: &[u8],
     ) -> ReadResult<Option<T>> {
-        TxSync::get(self, dbi, key)
+        TxSync::get_owned(self, dbi, key)
     }
 
     fn put(&mut self, db: Database, key: &[u8], data: &[u8], flags: WriteFlags) -> MdbxResult<()> {
@@ -121,12 +121,12 @@ impl TestRoTxn for TxSync<RO> {
         TxSync::open_db(self, name)
     }
 
-    fn get<'a, T: TableObject<'a>>(
-        &'a mut self,
+    fn get<T: TableObjectOwned + for<'a> TableObject<'a>>(
+        &mut self,
         dbi: ffi::MDBX_dbi,
         key: &[u8],
     ) -> ReadResult<Option<T>> {
-        TxSync::get(self, dbi, key)
+        TxSync::get_owned(self, dbi, key)
     }
 
     fn commit(self) -> MdbxResult<()> {
@@ -157,12 +157,12 @@ impl TestRwTxn for unsync::TxUnsync<RW> {
         unsync::TxUnsync::open_db(self, name)
     }
 
-    fn get<'a, T: TableObject<'a>>(
-        &'a mut self,
+    fn get<T: TableObjectOwned + for<'a> TableObject<'a>>(
+        &mut self,
         dbi: ffi::MDBX_dbi,
         key: &[u8],
     ) -> ReadResult<Option<T>> {
-        unsync::TxUnsync::get(self, dbi, key)
+        unsync::TxUnsync::get_owned(self, dbi, key)
     }
 
     fn put(&mut self, db: Database, key: &[u8], data: &[u8], flags: WriteFlags) -> MdbxResult<()> {
@@ -210,12 +210,12 @@ impl TestRoTxn for unsync::TxUnsync<RO> {
         unsync::TxUnsync::open_db(self, name)
     }
 
-    fn get<'a, T: TableObject<'a>>(
-        &'a mut self,
+    fn get<T: TableObjectOwned + for<'a> TableObject<'a>>(
+        &mut self,
         dbi: ffi::MDBX_dbi,
         key: &[u8],
     ) -> ReadResult<Option<T>> {
-        unsync::TxUnsync::get(self, dbi, key)
+        unsync::TxUnsync::get_owned(self, dbi, key)
     }
 
     fn commit(self) -> MdbxResult<()> {

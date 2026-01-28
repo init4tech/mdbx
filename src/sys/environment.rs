@@ -266,12 +266,15 @@ impl Environment {
         let mut cursor = txn.cursor(db)?;
         let mut iter = cursor.iter_slices();
 
-        while let Some((_key, value)) = iter.borrow_next()? {
-            if value.len() < size_of::<u32>() {
-                return Err(MdbxError::Corrupted.into());
-            }
-            let s = &value[..size_of::<u32>()];
-            freelist += NativeEndian::read_u32(s) as usize;
+        while let Some((_, value)) = iter.borrow_next()? {
+            value.flat_map(|value| {
+                if value.len() < size_of::<u32>() {
+                    return Err(MdbxError::Corrupted.into());
+                }
+                let s = &value[..size_of::<u32>()];
+                freelist += NativeEndian::read_u32(s) as usize;
+                Ok(())
+            })?;
         }
 
         Ok(freelist)

@@ -2,7 +2,8 @@
 use crate::tx::assertions;
 use crate::{
     Cursor, Database, Environment, MdbxError, RO, RW, ReadResult, Stat, TableObject,
-    TransactionKind,
+    TableObjectOwned, TransactionKind, TxView,
+    entries::SyncView,
     error::{MdbxResult, mdbx_result},
     flags::{DatabaseFlags, WriteFlags},
     sys::txn_manager::{RawTxPtr, TxnManagerMessage},
@@ -79,10 +80,16 @@ where
     /// returned. Retrieval of other items requires the use of
     /// [Cursor]. If the item is not in the database, then
     /// [None] will be returned.
-    pub fn get<'a, Key>(&'a self, dbi: ffi::MDBX_dbi, key: &[u8]) -> ReadResult<Option<Key>>
+    pub fn get<'a, Key>(
+        &'a self,
+        dbi: ffi::MDBX_dbi,
+        key: &[u8],
+    ) -> ReadResult<Option<SyncView<'a, K, Key>>>
     where
         Key: TableObject<'a>,
     {
+        let access = &*self.inner.ptr;
+
         self.txn_execute(|txn_ptr| {
             // SAFETY:
             // txn is a valid transaction pointer from txn_execute.
@@ -93,9 +100,23 @@ where
             // `decode_val` checks for dirty writes and copies data if needed.
             unsafe {
                 let data_val = ops::get_raw(txn_ptr, dbi, key)?;
-                data_val.map(|val| Key::decode_val::<K>(txn_ptr, val)).transpose()
+
+                data_val
+                    .map(|val| Key::decode_val::<PtrSyncInner<K>>(access, txn_ptr, val))
+                    .transpose()
             }
         })?
+    }
+
+    /// Gets an item from a database, returning an owned value.
+    ///
+    /// This is a convenience method that retrieves the data and converts it
+    /// to an owned value directly.
+    pub fn get_owned<T>(&self, dbi: ffi::MDBX_dbi, key: &[u8]) -> ReadResult<Option<T>>
+    where
+        T: TableObjectOwned + for<'a> TableObject<'a>,
+    {
+        self.get(dbi, key).map(|opt| opt.map(TxView::into_owned))
     }
 
     /// Commits the transaction.

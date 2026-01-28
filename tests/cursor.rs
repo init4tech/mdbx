@@ -5,7 +5,7 @@ use signet_libmdbx::{
     DatabaseFlags, Environment, MdbxError, MdbxResult, ObjectLength, ReadError, ReadResult,
     WriteFlags, tx::TxPtrAccess,
 };
-use std::{borrow::Cow, hint::black_box};
+use std::hint::black_box;
 use tempfile::tempdir;
 
 /// Convenience
@@ -28,21 +28,21 @@ fn test_get_impl<RwTx, RoTx>(
     let mut txn = begin_rw(&env).unwrap();
     let db = txn.open_db(None).unwrap();
 
-    assert_eq!(None, txn.cursor(db).unwrap().first::<(), ()>().unwrap());
+    assert_eq!(None, txn.cursor(db).unwrap().first_owned::<(), ()>().unwrap());
 
     txn.put(db, b"key1", b"val1", WriteFlags::empty()).unwrap();
     txn.put(db, b"key2", b"val2", WriteFlags::empty()).unwrap();
     txn.put(db, b"key3", b"val3", WriteFlags::empty()).unwrap();
 
     let mut cursor = txn.cursor(db).unwrap();
-    assert_eq!(cursor.first().unwrap(), Some((*b"key1", *b"val1")));
-    assert_eq!(cursor.get_current().unwrap(), Some((*b"key1", *b"val1")));
-    assert_eq!(cursor.next().unwrap(), Some((*b"key2", *b"val2")));
-    assert_eq!(cursor.prev().unwrap(), Some((*b"key1", *b"val1")));
-    assert_eq!(cursor.last().unwrap(), Some((*b"key3", *b"val3")));
-    assert_eq!(cursor.set(b"key1").unwrap(), Some(*b"val1"));
-    assert_eq!(cursor.set_key(b"key3").unwrap(), Some((*b"key3", *b"val3")));
-    assert_eq!(cursor.set_range(b"key2\0").unwrap(), Some((*b"key3", *b"val3")));
+    assert_eq!(cursor.first_owned().unwrap(), Some((*b"key1", *b"val1")));
+    assert_eq!(cursor.get_current_owned().unwrap(), Some((*b"key1", *b"val1")));
+    assert_eq!(cursor.next_owned().unwrap(), Some((*b"key2", *b"val2")));
+    assert_eq!(cursor.prev_owned().unwrap(), Some((*b"key1", *b"val1")));
+    assert_eq!(cursor.last_owned().unwrap(), Some((*b"key3", *b"val3")));
+    assert_eq!(cursor.set_owned(b"key1").unwrap(), Some(*b"val1"));
+    assert_eq!(cursor.set_key_owned(b"key3").unwrap(), Some((*b"key3", *b"val3")));
+    assert_eq!(cursor.set_range_owned(b"key2\0").unwrap(), Some((false, *b"key3", *b"val3")));
 }
 
 #[test]
@@ -75,33 +75,33 @@ fn test_get_dup_impl<RwTx, RoTx>(
     txn.put(db, b"key2", b"val3", WriteFlags::empty()).unwrap();
 
     let mut cursor = txn.cursor(db).unwrap();
-    assert_eq!(cursor.first().unwrap(), Some((*b"key1", *b"val1")));
-    assert_eq!(cursor.first_dup().unwrap(), Some(*b"val1"));
-    assert_eq!(cursor.get_current().unwrap(), Some((*b"key1", *b"val1")));
-    assert_eq!(cursor.next_nodup().unwrap(), Some((*b"key2", *b"val1")));
-    assert_eq!(cursor.next().unwrap(), Some((*b"key2", *b"val2")));
-    assert_eq!(cursor.prev().unwrap(), Some((*b"key2", *b"val1")));
-    assert_eq!(cursor.next_dup().unwrap(), Some((*b"key2", *b"val2")));
-    assert_eq!(cursor.next_dup().unwrap(), Some((*b"key2", *b"val3")));
-    assert_eq!(cursor.next_dup::<(), ()>().unwrap(), None);
-    assert_eq!(cursor.prev_dup().unwrap(), Some((*b"key2", *b"val2")));
-    assert_eq!(cursor.last_dup().unwrap(), Some(*b"val3"));
-    assert_eq!(cursor.prev_nodup().unwrap(), Some((*b"key1", *b"val3")));
-    assert_eq!(cursor.next_dup::<(), ()>().unwrap(), None);
-    assert_eq!(cursor.set(b"key1").unwrap(), Some(*b"val1"));
-    assert_eq!(cursor.set(b"key2").unwrap(), Some(*b"val1"));
-    assert_eq!(cursor.set_range(b"key1\0").unwrap(), Some((*b"key2", *b"val1")));
-    assert_eq!(cursor.get_both(b"key1", b"val3").unwrap(), Some(*b"val3"));
-    assert_eq!(cursor.get_both_range::<()>(b"key1", b"val4").unwrap(), None);
-    assert_eq!(cursor.get_both_range(b"key2", b"val").unwrap(), Some(*b"val1"));
+    assert_eq!(cursor.first_owned().unwrap(), Some((*b"key1", *b"val1")));
+    assert_eq!(cursor.first_dup_owned().unwrap(), Some(*b"val1"));
+    assert_eq!(cursor.get_current_owned().unwrap(), Some((*b"key1", *b"val1")));
+    assert_eq!(cursor.next_nodup_owned().unwrap(), Some((*b"key2", *b"val1")));
+    assert_eq!(cursor.next_owned().unwrap(), Some((*b"key2", *b"val2")));
+    assert_eq!(cursor.prev_owned().unwrap(), Some((*b"key2", *b"val1")));
+    assert_eq!(cursor.next_dup_owned().unwrap(), Some((*b"key2", *b"val2")));
+    assert_eq!(cursor.next_dup_owned().unwrap(), Some((*b"key2", *b"val3")));
+    assert_eq!(cursor.next_dup_owned::<(), ()>().unwrap(), None);
+    assert_eq!(cursor.prev_dup_owned().unwrap(), Some((*b"key2", *b"val2")));
+    assert_eq!(cursor.last_dup_owned().unwrap(), Some(*b"val3"));
+    assert_eq!(cursor.prev_nodup_owned().unwrap(), Some((*b"key1", *b"val3")));
+    assert_eq!(cursor.next_dup_owned::<(), ()>().unwrap(), None);
+    assert_eq!(cursor.set_owned(b"key1").unwrap(), Some(*b"val1"));
+    assert_eq!(cursor.set_owned(b"key2").unwrap(), Some(*b"val1"));
+    assert_eq!(cursor.set_range_owned(b"key1\0").unwrap(), Some((false, *b"key2", *b"val1")));
+    assert_eq!(cursor.get_both_owned(b"key1", b"val3").unwrap(), Some(*b"val3"));
+    assert_eq!(cursor.get_both_range_owned::<()>(b"key1", b"val4").unwrap(), None);
+    assert_eq!(cursor.get_both_range_owned(b"key2", b"val").unwrap(), Some(*b"val1"));
 
-    assert_eq!(cursor.last().unwrap(), Some((*b"key2", *b"val3")));
+    assert_eq!(cursor.last_owned().unwrap(), Some((*b"key2", *b"val3")));
     cursor.del(WriteFlags::empty()).unwrap();
-    assert_eq!(cursor.last().unwrap(), Some((*b"key2", *b"val2")));
+    assert_eq!(cursor.last_owned().unwrap(), Some((*b"key2", *b"val2")));
     cursor.del(WriteFlags::empty()).unwrap();
-    assert_eq!(cursor.last().unwrap(), Some((*b"key2", *b"val1")));
+    assert_eq!(cursor.last_owned().unwrap(), Some((*b"key2", *b"val1")));
     cursor.del(WriteFlags::empty()).unwrap();
-    assert_eq!(cursor.last().unwrap(), Some((*b"key1", *b"val3")));
+    assert_eq!(cursor.last_owned().unwrap(), Some((*b"key1", *b"val3")));
 }
 
 #[test]
@@ -134,9 +134,9 @@ fn test_get_dupfixed_impl<RwTx, RoTx>(
     txn.put(db, b"key2", b"val6", WriteFlags::empty()).unwrap();
 
     let mut cursor = txn.cursor(db).unwrap();
-    assert_eq!(cursor.first().unwrap(), Some((*b"key1", *b"val1")));
-    assert_eq!(cursor.get_multiple().unwrap(), Some(*b"val1val2val3"));
-    assert_eq!(cursor.next_multiple::<(), ()>().unwrap(), None);
+    assert_eq!(cursor.first_owned().unwrap(), Some((*b"key1", *b"val1")));
+    assert_eq!(cursor.get_multiple_owned().unwrap(), Some(*b"val1val2val3"));
+    assert_eq!(cursor.next_multiple_owned::<(), ()>().unwrap(), None);
 }
 
 #[test]
@@ -188,7 +188,7 @@ fn test_iter_impl<RwTx, RoTx>(
     let retr: Result<Vec<_>> = cursor.iter_start().unwrap().collect();
     assert_eq!(items, retr.unwrap());
 
-    cursor.set::<()>(b"key2").unwrap();
+    cursor.set_owned::<()>(b"key2").unwrap();
     assert_eq!(
         items.clone().into_iter().skip(2).collect::<Vec<_>>(),
         cursor.iter().collect::<Result<Vec<_>>>().unwrap()
@@ -334,7 +334,7 @@ fn test_iter_dup_impl<RwTx, RoTx>(
     let mut cursor = txn.cursor(db).unwrap();
     assert_eq!(items, cursor.iter_dup().flatten().flatten().collect::<Result<Vec<_>>>().unwrap());
 
-    cursor.set::<()>(b"b").unwrap();
+    cursor.set_owned::<()>(b"b").unwrap();
     assert_eq!(
         items.iter().copied().skip(6).collect::<Vec<_>>(),
         cursor.iter_dup().flatten().flatten().collect::<Result<Vec<_>>>().unwrap()
@@ -456,7 +456,7 @@ fn test_iter_del_get_impl<RwTx, RoTx>(
         cursor.iter_dup_of(b"a").unwrap().collect::<Result<Vec<_>>>().unwrap()
     );
 
-    assert_eq!(cursor.set(b"a").unwrap(), Some(*b"1"));
+    assert_eq!(cursor.set_owned(b"a").unwrap(), Some(*b"1"));
 
     cursor.del(WriteFlags::empty()).unwrap();
 
@@ -499,24 +499,12 @@ fn test_put_del_impl<RwTx, RoTx>(
     cursor.put(b"key2", b"val2", WriteFlags::empty()).unwrap();
     cursor.put(b"key3", b"val3", WriteFlags::empty()).unwrap();
 
-    assert_eq!(
-        cursor.set_key(b"key2").unwrap(),
-        Some((Cow::Borrowed(b"key2" as &[u8]), Cow::Borrowed(b"val2" as &[u8])))
-    );
-    assert_eq!(
-        cursor.get_current().unwrap(),
-        Some((Cow::Borrowed(b"key2" as &[u8]), Cow::Borrowed(b"val2" as &[u8])))
-    );
+    assert_eq!(cursor.set_key_owned(b"key2").unwrap(), Some((*b"key2", *b"val2")));
+    assert_eq!(cursor.get_current_owned().unwrap(), Some((*b"key2", *b"val2")));
 
     cursor.del(WriteFlags::empty()).unwrap();
-    assert_eq!(
-        cursor.get_current().unwrap(),
-        Some((Cow::Borrowed(b"key3" as &[u8]), Cow::Borrowed(b"val3" as &[u8])))
-    );
-    assert_eq!(
-        cursor.last().unwrap(),
-        Some((Cow::Borrowed(b"key3" as &[u8]), Cow::Borrowed(b"val3" as &[u8])))
-    );
+    assert_eq!(cursor.get_current_owned().unwrap(), Some((*b"key3", *b"val3")));
+    assert_eq!(cursor.last_owned().unwrap(), Some((*b"key3", *b"val3")));
 }
 
 #[test]
@@ -839,13 +827,13 @@ mod timeout_tests {
         let mut cursor = txn.cursor(db).unwrap();
 
         // Cursor should work before timeout
-        assert_eq!(cursor.first().unwrap(), Some((*b"key1", *b"val1")));
+        assert_eq!(cursor.first_owned().unwrap(), Some((*b"key1", *b"val1")));
 
         // Wait for timeout
         std::thread::sleep(WAIT_FOR_TIMEOUT);
 
         // Cursor operations should now fail with ReadTransactionTimeout
-        let err = cursor.first::<(), ()>().unwrap_err();
+        let err = cursor.first_owned::<(), ()>().unwrap_err();
         assert!(
             matches!(err, ReadError::Mdbx(MdbxError::ReadTransactionTimeout)),
             "Expected ReadTransactionTimeout, got: {err:?}"
@@ -882,7 +870,7 @@ mod timeout_tests {
         let txn = env.begin_ro_txn().unwrap();
         let db = txn.open_db(None).unwrap();
         let mut cursor = txn.cursor(db).unwrap();
-        assert_eq!(cursor.first().unwrap(), Some((*b"key1", *b"val1")));
+        assert_eq!(cursor.first_owned().unwrap(), Some((*b"key1", *b"val1")));
     }
 
     /// Test multiple cursors cleanup after timeout.
@@ -920,7 +908,7 @@ mod timeout_tests {
         let txn = env.begin_ro_txn().unwrap();
         let db = txn.open_db(Some("db1")).unwrap();
         let mut cursor = txn.cursor(db).unwrap();
-        assert_eq!(cursor.first().unwrap(), Some((*b"k1", *b"v1")));
+        assert_eq!(cursor.first_owned().unwrap(), Some((*b"k1", *b"v1")));
     }
 
     /// Test that transactions without timeout work correctly.
@@ -943,13 +931,13 @@ mod timeout_tests {
         let mut cursor = txn.cursor(db).unwrap();
 
         // Cursor should work before the "normal" timeout period
-        assert_eq!(cursor.first().unwrap(), Some((*b"key1", *b"val1")));
+        assert_eq!(cursor.first_owned().unwrap(), Some((*b"key1", *b"val1")));
 
         // Wait longer than the short timeout (but not forever)
         std::thread::sleep(WAIT_FOR_TIMEOUT);
 
         // Cursor should still work since there's no timeout
-        assert_eq!(cursor.first().unwrap(), Some((*b"key1", *b"val1")));
+        assert_eq!(cursor.first_owned().unwrap(), Some((*b"key1", *b"val1")));
     }
 
     /// Test iterator behavior after timeout.
@@ -1020,10 +1008,10 @@ fn test_cursor_append_impl<RwTx, RoTx>(
     let db = txn.open_db(None).unwrap();
     let mut cursor = txn.cursor(db).unwrap();
 
-    assert_eq!(cursor.first().unwrap(), Some((*b"a", *b"val_a")));
-    assert_eq!(cursor.next().unwrap(), Some((*b"b", *b"val_b")));
-    assert_eq!(cursor.next().unwrap(), Some((*b"c", *b"val_c")));
-    assert_eq!(cursor.next::<(), ()>().unwrap(), None);
+    assert_eq!(cursor.first_owned().unwrap(), Some((*b"a", *b"val_a")));
+    assert_eq!(cursor.next_owned().unwrap(), Some((*b"b", *b"val_b")));
+    assert_eq!(cursor.next_owned().unwrap(), Some((*b"c", *b"val_c")));
+    assert_eq!(cursor.next_owned::<(), ()>().unwrap(), None);
 }
 
 #[test]
@@ -1063,9 +1051,9 @@ fn test_tx_append_impl<RwTx, RoTx>(
     let db = txn.open_db(None).unwrap();
     let mut cursor = txn.cursor(db).unwrap();
 
-    assert_eq!(cursor.first().unwrap(), Some((*b"key1", *b"val1")));
-    assert_eq!(cursor.next().unwrap(), Some((*b"key2", *b"val2")));
-    assert_eq!(cursor.next().unwrap(), Some((*b"key3", *b"val3")));
+    assert_eq!(cursor.first_owned().unwrap(), Some((*b"key1", *b"val1")));
+    assert_eq!(cursor.next_owned().unwrap(), Some((*b"key2", *b"val2")));
+    assert_eq!(cursor.next_owned().unwrap(), Some((*b"key3", *b"val3")));
 }
 
 #[test]
@@ -1106,10 +1094,10 @@ fn test_append_dup_impl<RwTx, RoTx>(
     let db = txn.open_db(None).unwrap();
     let mut cursor = txn.cursor(db).unwrap();
 
-    assert_eq!(cursor.first().unwrap(), Some((*b"a", *b"1")));
-    assert_eq!(cursor.next_dup().unwrap(), Some((*b"a", *b"2")));
-    assert_eq!(cursor.next_dup().unwrap(), Some((*b"a", *b"3")));
-    assert_eq!(cursor.next_dup::<(), ()>().unwrap(), None);
+    assert_eq!(cursor.first_owned().unwrap(), Some((*b"a", *b"1")));
+    assert_eq!(cursor.next_dup_owned().unwrap(), Some((*b"a", *b"2")));
+    assert_eq!(cursor.next_dup_owned().unwrap(), Some((*b"a", *b"3")));
+    assert_eq!(cursor.next_dup_owned::<(), ()>().unwrap(), None);
 }
 
 #[test]
@@ -1250,7 +1238,7 @@ mod append_debug_tests {
         let db = txn.open_db(None).unwrap();
         let mut cursor = txn.cursor(db).unwrap();
 
-        let first: Option<(Vec<u8>, Vec<u8>)> = cursor.first().unwrap();
+        let first: Option<(Vec<u8>, Vec<u8>)> = cursor.first_owned().unwrap();
         assert!(first.is_some());
     }
 
@@ -1307,7 +1295,7 @@ mod append_debug_tests {
         let db = txn.open_db(None).unwrap();
         let mut cursor = txn.cursor(db).unwrap();
 
-        let first: Option<(Vec<u8>, Vec<u8>)> = cursor.first().unwrap();
+        let first: Option<(Vec<u8>, Vec<u8>)> = cursor.first_owned().unwrap();
         assert!(first.is_some());
     }
 

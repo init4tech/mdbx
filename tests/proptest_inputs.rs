@@ -43,7 +43,7 @@ proptest! {
 
         // If put succeeded, get should not panic
         if put_result.is_ok() {
-            let _: Option<Vec<u8>> = txn.get(db.dbi(), &key).unwrap();
+            let _: Option<Vec<u8>> = txn.get_owned(db.dbi(), &key).unwrap();
         }
     }
 
@@ -70,7 +70,7 @@ proptest! {
         let db = txn.open_db(None).unwrap();
 
         // Get on nonexistent key should return Ok(None), not panic
-        let result: signet_libmdbx::ReadResult<Option<Vec<u8>>> = txn.get(db.dbi(), &key);
+        let result: signet_libmdbx::ReadResult<Option<Vec<u8>>> = txn.get_owned(db.dbi(), &key);
         prop_assert!(result.is_ok());
         prop_assert!(result.unwrap().is_none());
     }
@@ -96,7 +96,7 @@ proptest! {
 
         // If put succeeded, get should not panic
         if put_result.is_ok() {
-            let _: Option<Vec<u8>> = txn.get(db.dbi(), &key).unwrap();
+            let _: Option<Vec<u8>> = txn.get_owned(db.dbi(), &key).unwrap();
         }
     }
 
@@ -123,7 +123,7 @@ proptest! {
         let db = txn.open_db(None).unwrap();
 
         // Get on nonexistent key should return Ok(None), not panic
-        let result: signet_libmdbx::ReadResult<Option<Vec<u8>>> = txn.get(db.dbi(), &key);
+        let result: signet_libmdbx::ReadResult<Option<Vec<u8>>> = txn.get_owned(db.dbi(), &key);
         prop_assert!(result.is_ok());
         prop_assert!(result.unwrap().is_none());
     }
@@ -150,7 +150,7 @@ proptest! {
         let mut cursor = txn.cursor(db).unwrap();
 
         // set() with arbitrary key should return None or value, never panic
-        let result: signet_libmdbx::ReadResult<Option<Vec<u8>>> = cursor.set(&key);
+        let result: signet_libmdbx::ReadResult<Option<Vec<u8>>> = cursor.set_owned(&key);
         prop_assert!(result.is_ok());
     }
 
@@ -169,8 +169,9 @@ proptest! {
         let mut cursor = txn.cursor(db).unwrap();
 
         // set_range() with arbitrary key should not panic
-        let result: signet_libmdbx::ReadResult<Option<(Vec<u8>, Vec<u8>)>> =
-            cursor.set_range(&key);
+        #[allow(clippy::type_complexity)]
+        let result: signet_libmdbx::ReadResult<Option<(bool, Vec<u8>, Vec<u8>)>> =
+            cursor.set_range_owned(&key);
         prop_assert!(result.is_ok());
     }
 
@@ -188,7 +189,7 @@ proptest! {
 
         // set_key() should not panic
         let result: signet_libmdbx::ReadResult<Option<(Vec<u8>, Vec<u8>)>> =
-            cursor.set_key(&key);
+            cursor.set_key_owned(&key);
         prop_assert!(result.is_ok());
     }
 
@@ -204,7 +205,7 @@ proptest! {
 
         let mut cursor = txn.cursor(db).unwrap();
 
-        let result: signet_libmdbx::ReadResult<Option<Vec<u8>>> = cursor.set(&key);
+        let result: signet_libmdbx::ReadResult<Option<Vec<u8>>> = cursor.set_owned(&key);
         prop_assert!(result.is_ok());
     }
 
@@ -221,8 +222,9 @@ proptest! {
 
         let mut cursor = txn.cursor(db).unwrap();
 
-        let result: signet_libmdbx::ReadResult<Option<(Vec<u8>, Vec<u8>)>> =
-            cursor.set_range(&key);
+        #[allow(clippy::type_complexity)]
+        let result: signet_libmdbx::ReadResult<Option<(bool, Vec<u8>, Vec<u8>)>> =
+            cursor.set_range_owned(&key);
         prop_assert!(result.is_ok());
     }
 
@@ -239,7 +241,7 @@ proptest! {
         let mut cursor = txn.cursor(db).unwrap();
 
         let result: signet_libmdbx::ReadResult<Option<(Vec<u8>, Vec<u8>)>> =
-            cursor.set_key(&key);
+            cursor.set_key_owned(&key);
         prop_assert!(result.is_ok());
     }
 }
@@ -344,7 +346,7 @@ proptest! {
 
         // get_both should not panic
         let result: signet_libmdbx::ReadResult<Option<Vec<u8>>> =
-            cursor.get_both(&search_key, &search_value);
+            cursor.get_both_owned(&search_key, &search_value);
         prop_assert!(result.is_ok());
     }
 
@@ -366,7 +368,7 @@ proptest! {
 
         // get_both_range should not panic
         let result: signet_libmdbx::ReadResult<Option<Vec<u8>>> =
-            cursor.get_both_range(&search_key, &search_value);
+            cursor.get_both_range_owned(&search_key, &search_value);
         prop_assert!(result.is_ok());
     }
 
@@ -387,7 +389,7 @@ proptest! {
         let mut cursor = txn.cursor(db).unwrap();
 
         let result: signet_libmdbx::ReadResult<Option<Vec<u8>>> =
-            cursor.get_both(&search_key, &search_value);
+            cursor.get_both_owned(&search_key, &search_value);
         prop_assert!(result.is_ok());
     }
 
@@ -408,7 +410,7 @@ proptest! {
         let mut cursor = txn.cursor(db).unwrap();
 
         let result: signet_libmdbx::ReadResult<Option<Vec<u8>>> =
-            cursor.get_both_range(&search_key, &search_value);
+            cursor.get_both_range_owned(&search_key, &search_value);
         prop_assert!(result.is_ok());
     }
 }
@@ -624,7 +626,7 @@ proptest! {
         prop_assert!(put_result.is_ok());
 
         let get_result: signet_libmdbx::ReadResult<Option<Vec<u8>>> =
-            txn.get(db.dbi(), b"");
+            txn.get_owned(db.dbi(), b"");
         prop_assert!(get_result.is_ok());
 
         let del_result = txn.del(db, b"", None);
@@ -647,7 +649,7 @@ proptest! {
         prop_assert!(put_result.is_ok());
 
         let get_result: signet_libmdbx::ReadResult<Option<Vec<u8>>> =
-            txn.get(db.dbi(), &key);
+            txn.get_owned(db.dbi(), &key);
         prop_assert!(get_result.is_ok());
         prop_assert!(get_result.unwrap().is_some());
     }
@@ -664,7 +666,7 @@ proptest! {
         prop_assert!(put_result.is_ok());
 
         let get_result: signet_libmdbx::ReadResult<Option<Vec<u8>>> =
-            txn.get(db.dbi(), b"");
+            txn.get_owned(db.dbi(), b"");
         prop_assert!(get_result.is_ok());
 
         let del_result = txn.del(db, b"", None);
@@ -685,7 +687,7 @@ proptest! {
         prop_assert!(put_result.is_ok());
 
         let get_result: signet_libmdbx::ReadResult<Option<Vec<u8>>> =
-            txn.get(db.dbi(), &key);
+            txn.get_owned(db.dbi(), &key);
         prop_assert!(get_result.is_ok());
         prop_assert!(get_result.unwrap().is_some());
     }
@@ -708,7 +710,7 @@ proptest! {
 
         let put_result = txn.put(db, &key, &value, WriteFlags::empty());
         if put_result.is_ok() {
-            let retrieved: Option<Vec<u8>> = txn.get(db.dbi(), &key).unwrap();
+            let retrieved: Option<Vec<u8>> = txn.get_owned(db.dbi(), &key).unwrap();
             prop_assert_eq!(retrieved, Some(value));
         }
     }
@@ -731,7 +733,7 @@ proptest! {
 
         let put_result = txn.put(db, &key, &value, WriteFlags::empty());
         if put_result.is_ok() {
-            let retrieved: Option<Vec<u8>> = txn.get(db.dbi(), &key).unwrap();
+            let retrieved: Option<Vec<u8>> = txn.get_owned(db.dbi(), &key).unwrap();
             prop_assert_eq!(retrieved, Some(value));
         }
     }
@@ -760,7 +762,7 @@ proptest! {
         let put2 = txn.put(db, &key, &value2, WriteFlags::empty());
 
         if put1.is_ok() && put2.is_ok() {
-            let retrieved: Option<Vec<u8>> = txn.get(db.dbi(), &key).unwrap();
+            let retrieved: Option<Vec<u8>> = txn.get_owned(db.dbi(), &key).unwrap();
             prop_assert_eq!(retrieved, Some(value2));
         }
     }
@@ -789,7 +791,7 @@ proptest! {
         let put2 = txn.put(db, &key, &value2, WriteFlags::empty());
 
         if put1.is_ok() && put2.is_ok() {
-            let retrieved: Option<Vec<u8>> = txn.get(db.dbi(), &key).unwrap();
+            let retrieved: Option<Vec<u8>> = txn.get_owned(db.dbi(), &key).unwrap();
             prop_assert_eq!(retrieved, Some(value2));
         }
     }
@@ -815,7 +817,7 @@ proptest! {
             let deleted = txn.del(db, &key, None).unwrap();
             prop_assert!(deleted);
 
-            let retrieved: Option<Vec<u8>> = txn.get(db.dbi(), &key).unwrap();
+            let retrieved: Option<Vec<u8>> = txn.get_owned(db.dbi(), &key).unwrap();
             prop_assert_eq!(retrieved, None);
         }
     }
@@ -841,7 +843,7 @@ proptest! {
             let deleted = txn.del(db, &key, None).unwrap();
             prop_assert!(deleted);
 
-            let retrieved: Option<Vec<u8>> = txn.get(db.dbi(), &key).unwrap();
+            let retrieved: Option<Vec<u8>> = txn.get_owned(db.dbi(), &key).unwrap();
             prop_assert_eq!(retrieved, None);
         }
     }
@@ -1044,7 +1046,7 @@ proptest! {
         let put_result = txn.put(db, &key, &value, WriteFlags::empty());
         if put_result.is_ok() {
             let mut cursor = txn.cursor(db).unwrap();
-            let retrieved: Option<Vec<u8>> = cursor.set(&key).unwrap();
+            let retrieved: Option<Vec<u8>> = cursor.set_owned(&key).unwrap();
             prop_assert_eq!(retrieved, Some(value));
         }
     }
@@ -1068,7 +1070,7 @@ proptest! {
         let put_result = txn.put(db, &key, &value, WriteFlags::empty());
         if put_result.is_ok() {
             let mut cursor = txn.cursor(db).unwrap();
-            let retrieved: Option<Vec<u8>> = cursor.set(&key).unwrap();
+            let retrieved: Option<Vec<u8>> = cursor.set_owned(&key).unwrap();
             prop_assert_eq!(retrieved, Some(value));
         }
     }
@@ -1111,7 +1113,10 @@ proptest! {
             .cloned();
 
         let mut cursor = txn.cursor(db).unwrap();
-        let result: Option<(Vec<u8>, Vec<u8>)> = cursor.set_range(&search_key).unwrap();
+        let result: Option<(Vec<u8>, Vec<u8>)> = cursor
+            .set_range_owned(&search_key)
+            .unwrap()
+            .map(|(_, k, v)| (k, v));
 
         prop_assert_eq!(result, expected);
     }
@@ -1153,7 +1158,10 @@ proptest! {
             .cloned();
 
         let mut cursor = txn.cursor(db).unwrap();
-        let result: Option<(Vec<u8>, Vec<u8>)> = cursor.set_range(&search_key).unwrap();
+        let result: Option<(Vec<u8>, Vec<u8>)> = cursor
+            .set_range_owned(&search_key)
+            .unwrap()
+            .map(|(_, k, v)| (k, v));
 
         prop_assert_eq!(result, expected);
     }

@@ -32,7 +32,7 @@ mod assertions;
 mod cache;
 pub(crate) use cache::{CachedDb, SharedCache};
 
-mod cursor;
+pub mod cursor;
 pub use cursor::{Cursor, RoCursorSync, RoCursorUnsync, RwCursorSync, RwCursorUnsync};
 
 mod database;

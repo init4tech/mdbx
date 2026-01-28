@@ -28,7 +28,8 @@
 use crate::tx::assertions;
 use crate::{
     CommitLatency, Database, Environment, MdbxError, RO, RW, ReadResult, Stat, TableObject,
-    TransactionKind,
+    TableObjectOwned, TransactionKind, TxView,
+    entries::TableViewUnsync,
     error::{MdbxResult, mdbx_result},
     flags::{DatabaseFlags, WriteFlags},
     tx::{
@@ -60,7 +61,7 @@ impl fmt::Debug for TxMeta {
 /// - Arc/Weak pattern for RO transactions (!Sync, with timeout support)
 /// - Direct ownership for RW transactions (!Send, !Sync, no mutex needed)
 pub struct TxUnsync<K: TransactionKind> {
-    txn: K::Inner,
+    txn: K::UnsyncAccess,
 
     meta: TxMeta,
 
@@ -185,17 +186,37 @@ impl<K: TransactionKind> TxUnsync<K> {
     }
 
     /// Gets an item from a database.
-    pub fn get<'a, Key>(&'a mut self, dbi: ffi::MDBX_dbi, key: &[u8]) -> ReadResult<Option<Key>>
+    pub fn get<'a, Key>(
+        &'a mut self,
+        dbi: ffi::MDBX_dbi,
+        key: &[u8],
+    ) -> ReadResult<Option<TableViewUnsync<'a, K, Key>>>
     where
         Key: TableObject<'a>,
     {
-        self.with_txn_ptr(|txn_ptr| {
-            // SAFETY: txn_ptr is valid from with_txn_ptr.
+        // Rebinding here allows us to use access in the closure, whereas
+        // if we used self.with_txn_ptr directly, we couldn't borrow self again
+        let access = &self.txn;
+        access.with_txn_ptr(|txn_ptr| {
+            // SAFETY: txn_ptr is valid within with_txn_ptr.
             unsafe {
                 let data_val = ops::get_raw(txn_ptr, dbi, key)?;
-                data_val.map(|val| Key::decode_val::<K>(txn_ptr, val)).transpose()
+                data_val
+                    .map(|val| Key::decode_val::<K::UnsyncAccess>(access, txn_ptr, val))
+                    .transpose()
             }
         })?
+    }
+
+    /// Gets an item from a database, returning an owned value.
+    ///
+    /// This is a convenience method that retrieves the data and converts it
+    /// to an owned value directly.
+    pub fn get_owned<T>(&mut self, dbi: ffi::MDBX_dbi, key: &[u8]) -> ReadResult<Option<T>>
+    where
+        T: TableObjectOwned + for<'a> TableObject<'a>,
+    {
+        self.get(dbi, key).map(|opt| opt.map(TxView::into_owned))
     }
 
     /// Opens a handle to an MDBX database.
@@ -266,7 +287,7 @@ impl<K: TransactionKind> TxUnsync<K> {
     /// Multiple cursors can be open simultaneously on different databases
     /// within the same transaction. The cursor borrows the transaction's
     /// inner access type, allowing concurrent cursor operations.
-    pub fn cursor(&self, db: Database) -> MdbxResult<Cursor<'_, K, K::Inner>> {
+    pub fn cursor(&self, db: Database) -> MdbxResult<Cursor<'_, K, K::UnsyncAccess>> {
         Cursor::new(&self.txn, db)
     }
 
@@ -541,13 +562,13 @@ mod tests {
         let mut txn = TxUnsync::<RO>::new(env.clone()).unwrap();
 
         let db = txn.open_db(None).unwrap();
-        let value: Option<Vec<u8>> = txn.get(db.dbi(), b"key1").unwrap();
+        let value: Option<Vec<u8>> = txn.get_owned(db.dbi(), b"key1").unwrap();
         assert_eq!(value.as_deref(), Some(b"value1".as_slice()));
 
-        let value: Option<Vec<u8>> = txn.get(db.dbi(), b"key2").unwrap();
+        let value: Option<Vec<u8>> = txn.get_owned(db.dbi(), b"key2").unwrap();
         assert_eq!(value.as_deref(), Some(b"value2".as_slice()));
 
-        let value: Option<Vec<u8>> = txn.get(db.dbi(), b"nonexistent").unwrap();
+        let value: Option<Vec<u8>> = txn.get_owned(db.dbi(), b"nonexistent").unwrap();
         assert!(value.is_none());
     }
 
@@ -582,7 +603,7 @@ mod tests {
 
         let mut txn = TxUnsync::<RO>::new_no_timeout(env).unwrap();
         let db = txn.open_db(None).unwrap();
-        let value: Option<Vec<u8>> = txn.get(db.dbi(), b"missing").unwrap();
+        let value: Option<Vec<u8>> = txn.get_owned(db.dbi(), b"missing").unwrap();
         assert!(value.is_none());
     }
 }

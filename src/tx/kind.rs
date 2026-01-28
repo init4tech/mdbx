@@ -35,20 +35,19 @@ pub trait TransactionKind: private::Sealed + core::fmt::Debug + 'static {
     const IS_READ_ONLY: bool;
 
     /// The inner storage type for the transaction pointer.
-    type Inner: TxPtrAccess;
+    type UnsyncAccess: TxPtrAccess;
 }
 
 impl TransactionKind for RO {
     const OPEN_FLAGS: MDBX_txn_flags_t = MDBX_TXN_RDONLY;
     const IS_READ_ONLY: bool = true;
 
-    // Without timeouts, RO uses direct pointer like RW
-    type Inner = RoGuard;
+    type UnsyncAccess = RoGuard;
 }
 
 impl TransactionKind for RW {
     const OPEN_FLAGS: MDBX_txn_flags_t = MDBX_TXN_READWRITE;
     const IS_READ_ONLY: bool = false;
 
-    type Inner = RwUnsync;
+    type UnsyncAccess = RwUnsync;
 }

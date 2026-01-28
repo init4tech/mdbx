@@ -517,7 +517,9 @@ where
     /// Commits the transaction.
     ///
     /// Any pending operations will be saved.
-    pub fn commit_inner(self, latency: *mut MDBX_commit_latency) -> MdbxResult<()> {
+    ///
+    /// SAFETY: latency pointer must be valid for the duration of the commit.
+    fn commit_inner(self, latency: *mut MDBX_commit_latency) -> MdbxResult<()> {
         let was_aborted = self.with_txn_ptr(|txn| {
             if K::IS_READ_ONLY {
                 mdbx_result(unsafe { ffi::mdbx_txn_commit_ex(txn, latency) })

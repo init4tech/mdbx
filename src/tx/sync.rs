@@ -2,7 +2,7 @@
 use crate::tx::assertions;
 use crate::{
     Cursor, Database, Environment, MdbxError, RO, RW, ReadResult, Stat, TableObject,
-    TableObjectOwned, TransactionKind, TxView,
+    TableObjectOwned, TransactionKind,
     entries::SyncView,
     error::{MdbxResult, mdbx_result},
     flags::{DatabaseFlags, WriteFlags},
@@ -114,9 +114,11 @@ where
     /// to an owned value directly.
     pub fn get_owned<T>(&self, dbi: ffi::MDBX_dbi, key: &[u8]) -> ReadResult<Option<T>>
     where
-        T: TableObjectOwned + for<'a> TableObject<'a>,
+        T: TableObjectOwned,
     {
-        self.get(dbi, key).map(|opt| opt.map(TxView::into_owned))
+        self.txn_execute(|txn_ptr| unsafe {
+            ops::get_raw(txn_ptr, dbi, key)?.map(|val| T::decode_val_owned(val)).transpose()
+        })?
     }
 
     /// Commits the transaction.

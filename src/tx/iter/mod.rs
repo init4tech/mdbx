@@ -56,29 +56,13 @@
 //! ```
 
 mod base;
-mod dup;
-mod dupfixed;
-mod dupfixed_key;
-
-use std::borrow::Cow;
-
 pub use base::Iter;
+
+mod dup;
 pub use dup::IterDup;
+
+mod dupfixed;
 pub use dupfixed::IterDupFixed;
+
+mod dupfixed_key;
 pub use dupfixed_key::IterDupFixedOfKey;
-
-/// Iterates over KV pairs in an MDBX database.
-pub type IterKeyVals<'tx, 'cur, K, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> =
-    Iter<'tx, 'cur, K, Key, Value, { ffi::MDBX_NEXT }>;
-
-/// An iterator over the key/value pairs in an MDBX `DUPSORT` with duplicate
-/// keys, yielding the first value for each key.
-///
-/// See the [`Iter`] documentation for more details.
-pub type IterDupKeys<'tx, 'cur, K, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> =
-    Iter<'tx, 'cur, K, Key, Value, { ffi::MDBX_NEXT_NODUP }>;
-
-/// An iterator over the key/value pairs in an MDBX `DUPSORT`, yielding each
-/// duplicate value for a specific key.
-pub type IterDupVals<'tx, 'cur, K, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> =
-    Iter<'tx, 'cur, K, Key, Value, { ffi::MDBX_NEXT_DUP }>;

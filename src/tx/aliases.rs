@@ -6,7 +6,7 @@ use crate::{
         PtrSync, PtrUnsync,
         cursor::Cursor,
         r#impl::Tx,
-        iter::{IterDupFixed, IterDupFixedOfKey, IterKeyVals},
+        iter::{Iter, IterDupFixed, IterDupFixedOfKey},
     },
 };
 use std::{borrow::Cow, sync::Arc};
@@ -60,6 +60,22 @@ pub type RoCursorUnsync<'tx> = Cursor<'tx, Ro>;
 pub type RwCursorUnsync<'tx> = Cursor<'tx, Rw>;
 
 // --- Iterator aliases ---
+
+/// Iterates over KV pairs in an MDBX database.
+pub type IterKeyVals<'tx, 'cur, K, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> =
+    Iter<'tx, 'cur, K, Key, Value, { ffi::MDBX_NEXT }>;
+
+/// An iterator over the key/value pairs in an MDBX `DUPSORT` with duplicate
+/// keys, yielding the first value for each key.
+///
+/// See the [`Iter`] documentation for more details.
+pub type IterDupKeys<'tx, 'cur, K, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> =
+    Iter<'tx, 'cur, K, Key, Value, { ffi::MDBX_NEXT_NODUP }>;
+
+/// An iterator over the key/value pairs in an MDBX `DUPSORT`, yielding each
+/// duplicate value for a specific key.
+pub type IterDupVals<'tx, 'cur, K, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> =
+    Iter<'tx, 'cur, K, Key, Value, { ffi::MDBX_NEXT_DUP }>;
 
 /// A key-value iterator for a synchronized read-only transaction.
 pub type RoIterSync<'tx, 'cur, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> =

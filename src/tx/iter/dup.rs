@@ -5,7 +5,8 @@ use crate::{
     error::mdbx_result,
     tx::{
         TxPtrAccess,
-        iter::{Iter, IterDupKeys, IterDupVals},
+        aliases::{IterDupKeys, IterDupVals},
+        iter::Iter,
     },
 };
 use std::{borrow::Cow, ptr};
@@ -27,7 +28,7 @@ where
     }
 }
 
-impl<'tx, 'cur, K, Key, Value> IterDup<'tx, 'cur, K, Key, Value>
+impl<'tx: 'cur, 'cur, K, Key, Value> IterDup<'tx, 'cur, K, Key, Value>
 where
     K: TransactionKind,
 {
@@ -76,7 +77,7 @@ where
     }
 }
 
-impl<'tx: 'cur, 'cur, K, Key, Value> IterDup<'tx, 'cur, K, Key, Value>
+impl<'tx, 'cur, K, Key, Value> IterDup<'tx, 'cur, K, Key, Value>
 where
     K: TransactionKind,
     Key: TableObject<'tx>,

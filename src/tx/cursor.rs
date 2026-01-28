@@ -4,7 +4,8 @@ use crate::{
     flags::*,
     tx::{
         TxPtrAccess,
-        iter::{Iter, IterDup, IterDupFixed, IterDupFixedOfKey, IterDupVals, IterKeyVals},
+        aliases::{IterDupVals, IterKeyVals},
+        iter::{Iter, IterDup, IterDupFixed, IterDupFixedOfKey},
         kind::WriteMarker,
     },
 };
@@ -528,7 +529,7 @@ where
                 Ok(None) | Err(_) => return IterDup::end_from_ref(self),
             }
         }
-        IterDup::from_ref(self)
+        IterDup::<K, Key, Value>::from_ref(self)
     }
 
     /// Iterate over duplicate database items starting from the beginning of the
@@ -560,7 +561,7 @@ where
         Value: TableObject<'tx>,
     {
         let Some(first) = self.set_range(key)? else {
-            return Ok(IterDup::end_from_ref(self));
+            return Ok(IterDup::<K, Key, Value>::end_from_ref(self));
         };
 
         Ok(IterDup::from_ref_with(self, first))

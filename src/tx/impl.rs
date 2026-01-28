@@ -43,6 +43,10 @@ pub type RoTxUnsync = TxUnsync<Ro>;
 // - TxMeta is ALWAYS Send
 // - Moving an RO transaction between threads is safe as long as no concurrent
 //   access occurs, which is guaranteed by being !Sync.
+//
+// NB: Send is correctly derived for RoTxSync and RwTxSync UNTIL
+// you unsafe impl Sync for RoTxUnsync below. This is a quirk I did not know
+// about.
 unsafe impl Send for RoTxSync {}
 unsafe impl Send for RwTxSync {}
 unsafe impl Send for RoTxUnsync {}

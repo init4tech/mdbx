@@ -96,11 +96,11 @@ fn test_get_dup_impl<RwTx, RoTx>(
     assert_eq!(cursor.get_both_range(b"key2", b"val").unwrap(), Some(*b"val1"));
 
     assert_eq!(cursor.last().unwrap(), Some((*b"key2", *b"val3")));
-    cursor.del(WriteFlags::empty()).unwrap();
+    cursor.del().unwrap();
     assert_eq!(cursor.last().unwrap(), Some((*b"key2", *b"val2")));
-    cursor.del(WriteFlags::empty()).unwrap();
+    cursor.del().unwrap();
     assert_eq!(cursor.last().unwrap(), Some((*b"key2", *b"val1")));
-    cursor.del(WriteFlags::empty()).unwrap();
+    cursor.del().unwrap();
     assert_eq!(cursor.last().unwrap(), Some((*b"key1", *b"val3")));
 }
 
@@ -458,7 +458,7 @@ fn test_iter_del_get_impl<RwTx, RoTx>(
 
     assert_eq!(cursor.set(b"a").unwrap(), Some(*b"1"));
 
-    cursor.del(WriteFlags::empty()).unwrap();
+    cursor.del().unwrap();
 
     assert_eq!(
         cursor
@@ -508,7 +508,7 @@ fn test_put_del_impl<RwTx, RoTx>(
         Some((Cow::Borrowed(b"key2" as &[u8]), Cow::Borrowed(b"val2" as &[u8])))
     );
 
-    cursor.del(WriteFlags::empty()).unwrap();
+    cursor.del().unwrap();
     assert_eq!(
         cursor.get_current().unwrap(),
         Some((Cow::Borrowed(b"key3" as &[u8]), Cow::Borrowed(b"val3" as &[u8])))

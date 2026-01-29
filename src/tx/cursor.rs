@@ -1,5 +1,5 @@
 use crate::{
-    Database, ReadResult, TableObject, TransactionKind, codec_try_optional,
+    Database, ReadError, ReadResult, TableObject, TransactionKind, codec_try_optional,
     error::{MdbxResult, mdbx_result},
     flags::*,
     tx::{
@@ -358,6 +358,8 @@ where
     }
 
     /// Position at specified key.
+    ///
+    /// For DupSort-ed databases, positions at first data item of the key.
     pub fn set<Value>(&mut self, key: &[u8]) -> ReadResult<Option<Value>>
     where
         Value: TableObject<'tx>,
@@ -808,6 +810,44 @@ impl<'tx, K: TransactionKind + WriteMarker> Cursor<'tx, K> {
                 .with_txn_ptr(|_| unsafe { ffi::mdbx_cursor_del(self.cursor, flags.bits()) }),
         )
         .map(drop)
+    }
+
+    /// Deletes all duplicate data items for the current key.
+    ///
+    /// This is a [`DatabaseFlags::DUP_SORT`]-only operation that efficiently
+    /// removes all values associated with the current key in a single call.
+    ///
+    /// The cursor must be positioned at a valid key before calling this method.
+    /// After deletion, the cursor position is undefined.
+    pub fn del_all_dups(&mut self) -> MdbxResult<()> {
+        #[cfg(debug_assertions)]
+        assertions::debug_assert_dup_sort(self.db_flags());
+        self.del(WriteFlags::ALLDUPS)
+    }
+
+    /// Delete all duplicate data items for the specified key.
+    ///
+    /// This is a [`DatabaseFlags::DUP_SORT`]-only operation that efficiently
+    /// removes all values associated with the given key in a single call.
+    ///
+    /// If the key does not exist, no action is taken.
+    pub fn del_all_dups_of(&mut self, key: &[u8]) -> MdbxResult<()> {
+        #[cfg(debug_assertions)]
+        assertions::debug_assert_dup_sort(self.db_flags());
+
+        // Position at the key. Convert the error to MdbxResult.
+        let found = self.set::<()>(key).map_err(|e| match e {
+            ReadError::Mdbx(e) => e,
+            _ => unreachable!("() can always be decoded"),
+        })?;
+
+        if found.is_none() {
+            // Key not found, nothing to delete
+            return Ok(());
+        }
+
+        // Delete all duplicates for the current key
+        self.del_all_dups()
     }
 
     /// Appends a key/data pair to the end of the database.

@@ -9,7 +9,7 @@
 
 #![allow(dead_code)]
 
-use crate::flags::DatabaseFlags;
+use crate::DatabaseFlags;
 
 /// Debug assertion that validates key size constraints.
 ///
@@ -189,4 +189,24 @@ fn debug_assert_append_dup_order(flags: DatabaseFlags, last_dup: Option<&[u8]>, 
     }
     #[cfg(not(debug_assertions))]
     let _ = (flags, last_dup, new_data);
+}
+
+/// Debug assertion that validates DUP_SORT flag is set.
+#[inline(always)]
+#[track_caller]
+pub(crate) fn debug_assert_dup_sort(flags: DatabaseFlags) {
+    debug_assert!(
+        flags.contains(DatabaseFlags::DUP_SORT),
+        "Operation requires DUP_SORT database flag"
+    );
+}
+
+/// Debug assertion that validates DUP_FIXED flag is set.
+#[inline(always)]
+#[track_caller]
+pub(crate) fn debug_assert_dup_fixed(flags: DatabaseFlags) {
+    debug_assert!(
+        flags.contains(DatabaseFlags::DUP_FIXED),
+        "Operation requires DUP_FIXED database flag"
+    );
 }

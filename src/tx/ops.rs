@@ -399,7 +399,7 @@ pub(crate) unsafe fn debug_assert_append(
     let pagesize = unsafe { get_pagesize(txn) };
     // SAFETY: Caller guarantees txn and dbi are valid.
     let last_key = unsafe { get_last_key(txn, dbi) };
-    super::assertions::debug_assert_append(pagesize, flags, key, data, last_key.as_deref());
+    crate::tx::assertions::debug_assert_append(pagesize, flags, key, data, last_key.as_deref());
 }
 
 /// All-in-one append_dup assertion: opens cursor, gets last dup, asserts, closes cursor.
@@ -420,5 +420,5 @@ pub(crate) unsafe fn debug_assert_append_dup(
     let pagesize = unsafe { get_pagesize(txn) };
     // SAFETY: Caller guarantees txn and dbi are valid.
     let last_dup = unsafe { get_last_dup(txn, dbi, key) };
-    super::assertions::debug_assert_append_dup(pagesize, flags, key, data, last_dup.as_deref());
+    crate::tx::assertions::debug_assert_append_dup(pagesize, flags, key, data, last_dup.as_deref());
 }

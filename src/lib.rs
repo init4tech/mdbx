@@ -160,9 +160,8 @@ pub mod sys;
 pub use sys::{Environment, EnvironmentBuilder, Geometry, Info, Stat};
 
 pub mod tx;
-pub use tx::{
-    CommitLatency, Cursor, Database, Ro, RoSync, Rw, RwSync, TransactionKind, TxSync, TxUnsync,
-};
+pub use tx::aliases::{TxSync, TxUnsync};
+pub use tx::{CommitLatency, Cursor, Database, Ro, RoSync, Rw, RwSync, TransactionKind};
 
 #[cfg(test)]
 mod test {

@@ -3,10 +3,11 @@ use crate::{
     Ro, Rw, Stat, TableObject, TransactionKind, WriteFlags,
     error::mdbx_result,
     sys::txn_manager::{Begin, Commit, CommitLatencyPtr, RawTxPtr},
+    tx::aliases::{RoTxSync, RoTxUnsync, RwTxUnsync},
     tx::{
         PtrSync, PtrUnsync, TxPtrAccess,
         cache::{Cache, CachedDb},
-        kind::{RoSync, RwSync, SyncKind, WriteMarker, WriterKind},
+        kind::{RoSync, SyncKind, WriteMarker, WriterKind},
         ops,
     },
 };
@@ -22,41 +23,8 @@ use std::{
 };
 use tracing::{debug_span, instrument, warn};
 
-/// Transaction type for synchronized access.
-pub type TxSync<K> = Tx<K, Arc<PtrSync>>;
-
-/// Transaction type for unsynchronized access.
-pub type TxUnsync<K> = Tx<K, PtrUnsync>;
-
-/// A synchronized read-only transaction.
-pub type RoTxSync = TxSync<RoSync>;
-
-/// A synchronized read-write transaction.
-pub type RwTxSync = TxSync<RwSync>;
-
-/// An unsynchronized read-only transaction.
-pub type RoTxUnsync = TxUnsync<Ro>;
-
-// SAFETY:
-// - RoTxSync and RwTxSync use Arc<PtrSync> which is Send and Sync.
-// - K::Cache is ALWAYS Send
-// - TxMeta is ALWAYS Send
-// - Moving an RO transaction between threads is safe as long as no concurrent
-//   access occurs, which is guaranteed by being !Sync.
-//
-// NB: Send is correctly derived for RoTxSync and RwTxSync UNTIL
-// you unsafe impl Sync for RoTxUnsync below. This is a quirk I did not know
-// about.
-unsafe impl Send for RoTxSync {}
-unsafe impl Send for RwTxSync {}
-unsafe impl Send for RoTxUnsync {}
-
-// // SAFETY: RoTxUnsync cannot be shared between threads, but can be moved.
-// // This satisfies MDBX's requirements for read-only transactions.
-// unsafe impl Send for RoTxUnsync {}
-
-/// An unsynchronized read-write transaction.
-pub type RwTxUnsync = TxUnsync<Rw>;
+#[cfg(debug_assertions)]
+use crate::tx::assertions;
 
 /// Meta-data for a transaction.
 #[derive(Clone)]
@@ -73,8 +41,12 @@ impl fmt::Debug for TxMeta {
 
 /// An MDBX transaction.
 ///
-/// Prefer using the [`TxSync`] or [`TxUnsync`] type aliases, unless
-/// specifically implementing generic code over all four transaction kinds.
+/// Prefer using the [`TxSync`] or
+/// [`TxUnsync`] type aliases, unless specifically
+/// implementing generic code over all four transaction kinds.
+///
+/// [`TxSync`]: crate::tx::aliases::TxSync
+/// [`TxUnsync`]: crate::tx::aliases::TxUnsync
 pub struct Tx<K: TransactionKind, U = <K as SyncKind>::Access> {
     txn: U,
 
@@ -330,7 +302,7 @@ impl<K: TransactionKind + WriteMarker> Tx<K> {
     ///
     /// The key must be greater than all existing keys (or less than, for
     /// [`DatabaseFlags::REVERSE_KEY`] tables). This is more efficient than
-    /// [`TxSync::put`] when adding data in sorted order.
+    /// [`Tx::put`] when adding data in sorted order.
     ///
     /// In debug builds, this method asserts that the key ordering constraint is
     /// satisfied.
@@ -359,10 +331,7 @@ impl<K: TransactionKind + WriteMarker> Tx<K> {
     ///
     /// The data must be greater than all existing data for this key (or less
     /// than, for [`DatabaseFlags::REVERSE_DUP`] tables). This is more efficient
-    /// than [`TxSync::put`] when adding duplicates in sorted order.
-    ///
-    /// Returns [`MdbxError::RequiresDupSort`] if the database does not have the
-    /// [`DatabaseFlags::DUP_SORT`] flag set.
+    /// than [`Tx::put`] when adding duplicates in sorted order.
     ///
     /// In debug builds, this method asserts that the data ordering constraint
     /// is satisfied.
@@ -372,9 +341,9 @@ impl<K: TransactionKind + WriteMarker> Tx<K> {
         key: impl AsRef<[u8]>,
         data: impl AsRef<[u8]>,
     ) -> MdbxResult<()> {
-        if !db.flags().contains(DatabaseFlags::DUP_SORT) {
-            return Err(MdbxError::RequiresDupSort);
-        }
+        #[cfg(debug_assertions)]
+        assertions::debug_assert_dup_sort(db.flags());
+
         let key = key.as_ref();
         let data = data.as_ref();
 
@@ -431,7 +400,7 @@ impl<K: TransactionKind + WriteMarker> Tx<K> {
     /// Reserves space for a value of the given length at the given key, and
     /// calls the given closure with a mutable slice to write into.
     ///
-    /// This is a safe wrapper around [`TxSync::reserve`].
+    /// This is a safe wrapper around [`Tx::reserve`].
     pub fn with_reservation(
         &self,
         db: Database,
@@ -611,7 +580,7 @@ impl<K> Tx<K, Arc<PtrSync>>
 where
     K: TransactionKind<Access = Arc<PtrSync>> + WriteMarker,
 {
-    /// Begins a new [`RwTxSync`] transaction.
+    /// Begins a new [`RwTxSync`](crate::tx::aliases::RwTxSync) transaction.
     pub fn begin(env: Environment) -> MdbxResult<Self> {
         let mut warned = false;
         let txn = loop {
@@ -686,6 +655,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tx::aliases::{RoTxSync, RwTxSync, TxUnsync};
     use tempfile::tempdir;
 
     #[test]

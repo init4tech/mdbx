@@ -2,8 +2,8 @@
 //!
 //! # Core Types (re-exported at crate root)
 //!
-//! - [`TxSync`] - Thread-safe synchronized transaction
-//! - [`TxUnsync`] - Single-threaded unsynchronized transaction
+//! - [`aliases::TxSync`] - Thread-safe synchronized transaction
+//! - [`aliases::TxUnsync`] - Single-threaded unsynchronized transaction
 //! - [`Cursor`] - Database cursor for navigating entries
 //! - [`Database`] - Handle to an opened database
 //! - [`Ro`], [`Rw`], [`RoSync`], [`RwSync`] - Transaction kind markers
@@ -11,12 +11,15 @@
 //!
 //! # Type Aliases
 //!
-//! Convenience aliases for common transaction/cursor configurations:
-//! - [`RoTxSync`], [`RwTxSync`] - Synchronized transactions
-//! - [`RoTxUnsync`], [`RwTxUnsync`] - Unsynchronized transactions
-//! - [`RoCursorSync`], [`RwCursorSync`] - Cursors for synchronized transactions
-//! - [`RoCursorUnsync`], [`RwCursorUnsync`] - Cursors for unsynchronized
+//! Convenience aliases for common transaction/cursor/iterator configurations
+//! are available in [`aliases`]:
+//! - [`aliases::RoTxSync`], [`aliases::RwTxSync`] - Synchronized transactions
+//! - [`aliases::RoTxUnsync`], [`aliases::RwTxUnsync`] - Unsynchronized
 //!   transactions
+//! - [`aliases::RoCursorSync`], [`aliases::RwCursorSync`] - Cursors for
+//!   synchronized transactions
+//! - [`aliases::RoCursorUnsync`], [`aliases::RwCursorUnsync`] - Cursors for
+//!   unsynchronized transactions
 //!
 //! # Advanced: Writing Generic Code
 //!
@@ -30,16 +33,17 @@ mod assertions;
 mod access;
 pub use access::{PtrSync, PtrUnsync, TxPtrAccess};
 
+pub mod aliases;
+
 pub mod cache;
 
 mod cursor;
-pub use cursor::{Cursor, RoCursorSync, RoCursorUnsync, RwCursorSync, RwCursorUnsync};
+pub use cursor::Cursor;
 
 mod database;
 pub use database::Database;
 
 pub mod iter;
-pub use iter::{RoIterSync, RoIterUnsync, RwIterSync, RwIterUnsync};
 
 mod kind;
 pub use kind::{Ro, RoSync, Rw, RwSync, SyncKind, TransactionKind, WriteMarker, WriterKind};
@@ -51,4 +55,4 @@ pub use lat::CommitLatency;
 pub mod ops;
 
 mod r#impl;
-pub use r#impl::{RoTxSync, RoTxUnsync, RwTxSync, RwTxUnsync, Tx, TxSync, TxUnsync};
+pub use r#impl::Tx;

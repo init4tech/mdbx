@@ -4,7 +4,7 @@
 use signet_libmdbx::{
     Environment, WriteFlags,
     ffi::{MDBX_TXN_RDONLY, MDBX_env, MDBX_txn, mdbx_txn_begin_ex},
-    tx::{RoTxSync, RoTxUnsync, RwTxSync, RwTxUnsync},
+    tx::aliases::{RoTxSync, RoTxUnsync, RwTxSync, RwTxUnsync},
 };
 use std::ptr;
 use tempfile::{TempDir, tempdir};

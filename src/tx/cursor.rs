@@ -1,32 +1,25 @@
 use crate::{
-    Database, MdbxError, ReadResult, TableObject, TransactionKind, codec_try_optional,
+    Database, ReadError, ReadResult, TableObject, TransactionKind, codec_try_optional,
     error::{MdbxResult, mdbx_result},
     flags::*,
     tx::{
-        TxPtrAccess, assertions,
-        iter::{Iter, IterDup, IterDupVals, IterKeyVals},
+        TxPtrAccess,
+        aliases::{IterDupVals, IterKeyVals},
+        iter::{Iter, IterDup, IterDupFixed, IterDupFixedOfKey},
         kind::WriteMarker,
     },
 };
 use ffi::{
     MDBX_FIRST, MDBX_FIRST_DUP, MDBX_GET_BOTH, MDBX_GET_BOTH_RANGE, MDBX_GET_CURRENT,
     MDBX_GET_MULTIPLE, MDBX_LAST, MDBX_LAST_DUP, MDBX_NEXT, MDBX_NEXT_DUP, MDBX_NEXT_MULTIPLE,
-    MDBX_NEXT_NODUP, MDBX_PREV, MDBX_PREV_DUP, MDBX_PREV_MULTIPLE, MDBX_PREV_NODUP, MDBX_SET,
-    MDBX_SET_KEY, MDBX_SET_LOWERBOUND, MDBX_SET_RANGE, MDBX_cursor_op,
+    MDBX_NEXT_NODUP, MDBX_PREV, MDBX_PREV_DUP, MDBX_PREV_MULTIPLE, MDBX_PREV_NODUP,
+    MDBX_SEEK_AND_GET_MULTIPLE, MDBX_SET, MDBX_SET_KEY, MDBX_SET_LOWERBOUND, MDBX_SET_RANGE,
+    MDBX_cursor_op,
 };
 use std::{ffi::c_void, fmt, marker::PhantomData, ptr};
 
-/// A read-only cursor for a synchronized transaction.
-pub type RoCursorSync<'tx> = Cursor<'tx, crate::RoSync>;
-
-/// A read-write cursor for a synchronized transaction.
-pub type RwCursorSync<'tx> = Cursor<'tx, crate::RwSync>;
-
-/// A read-only cursor for an unsynchronized transaction.
-pub type RoCursorUnsync<'tx> = Cursor<'tx, crate::Ro>;
-
-/// A read-write cursor for an unsynchronized transaction.
-pub type RwCursorUnsync<'tx> = Cursor<'tx, crate::Rw>;
+#[cfg(debug_assertions)]
+use crate::tx::assertions;
 
 /// A cursor for navigating the items within a database.
 ///
@@ -115,26 +108,6 @@ where
     pub fn is_eof(&self) -> bool {
         self.access.with_txn_ptr(|_| unsafe { ffi::mdbx_cursor_eof(self.cursor) })
             == ffi::MDBX_RESULT_TRUE
-    }
-
-    /// Validates that the database has the DUP_SORT flag set.
-    #[inline(always)]
-    fn require_dup_sort(&self) -> MdbxResult<()> {
-        self.db
-            .flags()
-            .contains(DatabaseFlags::DUP_SORT)
-            .then_some(())
-            .ok_or(MdbxError::RequiresDupSort)
-    }
-
-    /// Validates that the database has the DUP_FIXED flag set.
-    #[inline(always)]
-    fn require_dup_fixed(&self) -> MdbxResult<()> {
-        self.db
-            .flags()
-            .contains(DatabaseFlags::DUP_FIXED)
-            .then_some(())
-            .ok_or(MdbxError::RequiresDupFixed)
     }
 
     /// Retrieves a key/data pair from the cursor. Depending on the cursor op,
@@ -226,39 +199,33 @@ where
     }
 
     /// [`DatabaseFlags::DUP_SORT`]-only: Position at first data item of current key.
-    ///
-    /// Returns [`MdbxError::RequiresDupSort`] if the database does not have the
-    /// [`DatabaseFlags::DUP_SORT`] flag set.
     pub fn first_dup<Value>(&mut self) -> ReadResult<Option<Value>>
     where
         Value: TableObject<'tx>,
     {
-        self.require_dup_sort()?;
+        #[cfg(debug_assertions)]
+        assertions::debug_assert_dup_sort(self.db_flags());
         self.get_value(None, None, MDBX_FIRST_DUP)
     }
 
     /// [`DatabaseFlags::DUP_SORT`]-only: Position at key/data pair.
-    ///
-    /// Returns [`MdbxError::RequiresDupSort`] if the database does not have the
-    /// [`DatabaseFlags::DUP_SORT`] flag set.
     pub fn get_both<Value>(&mut self, k: &[u8], v: &[u8]) -> ReadResult<Option<Value>>
     where
         Value: TableObject<'tx>,
     {
-        self.require_dup_sort()?;
+        #[cfg(debug_assertions)]
+        assertions::debug_assert_dup_sort(self.db_flags());
         self.get_value(Some(k), Some(v), MDBX_GET_BOTH)
     }
 
     /// [`DatabaseFlags::DUP_SORT`]-only: Position at given key and at first data greater than or
     /// equal to specified data.
-    ///
-    /// Returns [`MdbxError::RequiresDupSort`] if the database does not have the
-    /// [`DatabaseFlags::DUP_SORT`] flag set.
     pub fn get_both_range<Value>(&mut self, k: &[u8], v: &[u8]) -> ReadResult<Option<Value>>
     where
         Value: TableObject<'tx>,
     {
-        self.require_dup_sort()?;
+        #[cfg(debug_assertions)]
+        assertions::debug_assert_dup_sort(self.db_flags());
         self.get_value(Some(k), Some(v), MDBX_GET_BOTH_RANGE)
     }
 
@@ -273,15 +240,31 @@ where
 
     /// [`DatabaseFlags::DUP_FIXED`]-only: Return up to a page of duplicate data items from current
     /// cursor position. Move cursor to prepare for [`Self::next_multiple()`].
-    ///
-    /// Returns [`MdbxError::RequiresDupFixed`] if the database does not have the
-    /// [`DatabaseFlags::DUP_FIXED`] flag set.
     pub fn get_multiple<Value>(&mut self) -> ReadResult<Option<Value>>
     where
         Value: TableObject<'tx>,
     {
-        self.require_dup_fixed()?;
+        #[cfg(debug_assertions)]
+        assertions::debug_assert_dup_fixed(self.db_flags());
         self.get_value(None, None, MDBX_GET_MULTIPLE)
+    }
+
+    /// [`DatabaseFlags::DUP_FIXED`]-only: Seek to the given key and return up to a page of
+    /// duplicate data items. Move cursor to prepare for [`Self::next_multiple()`].
+    pub fn seek_and_get_multiple<Key, Value>(
+        &mut self,
+        key: &[u8],
+    ) -> ReadResult<Option<(Key, Value)>>
+    where
+        Key: TableObject<'tx>,
+        Value: TableObject<'tx>,
+    {
+        #[cfg(debug_assertions)]
+        {
+            assertions::debug_assert_dup_fixed(self.db_flags());
+            assertions::debug_assert_integer_key(self.db_flags(), key);
+        }
+        self.get_full(Some(key), None, MDBX_SEEK_AND_GET_MULTIPLE)
     }
 
     /// Position at last key/data item.
@@ -294,14 +277,12 @@ where
     }
 
     /// [`DatabaseFlags::DUP_SORT`]-only: Position at last data item of current key.
-    ///
-    /// Returns [`MdbxError::RequiresDupSort`] if the database does not have the
-    /// [`DatabaseFlags::DUP_SORT`] flag set.
     pub fn last_dup<Value>(&mut self) -> ReadResult<Option<Value>>
     where
         Value: TableObject<'tx>,
     {
-        self.require_dup_sort()?;
+        #[cfg(debug_assertions)]
+        assertions::debug_assert_dup_sort(self.db_flags());
         self.get_value(None, None, MDBX_LAST_DUP)
     }
 
@@ -316,29 +297,25 @@ where
     }
 
     /// [`DatabaseFlags::DUP_SORT`]-only: Position at next data item of current key.
-    ///
-    /// Returns [`MdbxError::RequiresDupSort`] if the database does not have the
-    /// [`DatabaseFlags::DUP_SORT`] flag set.
     pub fn next_dup<Key, Value>(&mut self) -> ReadResult<Option<(Key, Value)>>
     where
         Key: TableObject<'tx>,
         Value: TableObject<'tx>,
     {
-        self.require_dup_sort()?;
+        #[cfg(debug_assertions)]
+        assertions::debug_assert_dup_sort(self.db_flags());
         self.get_full(None, None, MDBX_NEXT_DUP)
     }
 
     /// [`DatabaseFlags::DUP_FIXED`]-only: Return up to a page of duplicate data items from next
     /// cursor position. Move cursor to prepare for `MDBX_NEXT_MULTIPLE`.
-    ///
-    /// Returns [`MdbxError::RequiresDupFixed`] if the database does not have the
-    /// [`DatabaseFlags::DUP_FIXED`] flag set.
     pub fn next_multiple<Key, Value>(&mut self) -> ReadResult<Option<(Key, Value)>>
     where
         Key: TableObject<'tx>,
         Value: TableObject<'tx>,
     {
-        self.require_dup_fixed()?;
+        #[cfg(debug_assertions)]
+        assertions::debug_assert_dup_fixed(self.db_flags());
         self.get_full(None, None, MDBX_NEXT_MULTIPLE)
     }
 
@@ -361,15 +338,13 @@ where
     }
 
     /// [`DatabaseFlags::DUP_SORT`]-only: Position at previous data item of current key.
-    ///
-    /// Returns [`MdbxError::RequiresDupSort`] if the database does not have the
-    /// [`DatabaseFlags::DUP_SORT`] flag set.
     pub fn prev_dup<Key, Value>(&mut self) -> ReadResult<Option<(Key, Value)>>
     where
         Key: TableObject<'tx>,
         Value: TableObject<'tx>,
     {
-        self.require_dup_sort()?;
+        #[cfg(debug_assertions)]
+        assertions::debug_assert_dup_sort(self.db_flags());
         self.get_full(None, None, MDBX_PREV_DUP)
     }
 
@@ -383,11 +358,14 @@ where
     }
 
     /// Position at specified key.
+    ///
+    /// For DupSort-ed databases, positions at first data item of the key.
     pub fn set<Value>(&mut self, key: &[u8]) -> ReadResult<Option<Value>>
     where
         Value: TableObject<'tx>,
     {
-        assertions::debug_assert_integer_key(self.db.flags(), key);
+        #[cfg(debug_assertions)]
+        assertions::debug_assert_integer_key(self.db_flags(), key);
         self.get_value(Some(key), None, MDBX_SET)
     }
 
@@ -397,7 +375,8 @@ where
         Key: TableObject<'tx>,
         Value: TableObject<'tx>,
     {
-        assertions::debug_assert_integer_key(self.db.flags(), key);
+        #[cfg(debug_assertions)]
+        assertions::debug_assert_integer_key(self.db_flags(), key);
         self.get_full(Some(key), None, MDBX_SET_KEY)
     }
 
@@ -407,21 +386,20 @@ where
         Key: TableObject<'tx>,
         Value: TableObject<'tx>,
     {
-        assertions::debug_assert_integer_key(self.db.flags(), key);
+        #[cfg(debug_assertions)]
+        assertions::debug_assert_integer_key(self.db_flags(), key);
         self.get_full(Some(key), None, MDBX_SET_RANGE)
     }
 
     /// [`DatabaseFlags::DUP_FIXED`]-only: Position at previous page and return up to a page of
     /// duplicate data items.
-    ///
-    /// Returns [`MdbxError::RequiresDupFixed`] if the database does not have the
-    /// [`DatabaseFlags::DUP_FIXED`] flag set.
     pub fn prev_multiple<Key, Value>(&mut self) -> ReadResult<Option<(Key, Value)>>
     where
         Key: TableObject<'tx>,
         Value: TableObject<'tx>,
     {
-        self.require_dup_fixed()?;
+        #[cfg(debug_assertions)]
+        assertions::debug_assert_dup_fixed(self.db_flags());
         self.get_full(None, None, MDBX_PREV_MULTIPLE)
     }
 
@@ -442,7 +420,8 @@ where
         Key: TableObject<'tx>,
         Value: TableObject<'tx>,
     {
-        assertions::debug_assert_integer_key(self.db.flags(), key);
+        #[cfg(debug_assertions)]
+        assertions::debug_assert_integer_key(self.db_flags(), key);
         let (k, v, found) = codec_try_optional!(self.get(Some(key), None, MDBX_SET_LOWERBOUND));
 
         Ok(Some((found, k.unwrap(), v)))
@@ -552,7 +531,7 @@ where
                 Ok(None) | Err(_) => return IterDup::end_from_ref(self),
             }
         }
-        IterDup::from_ref(self)
+        IterDup::<K, Key, Value>::from_ref(self)
     }
 
     /// Iterate over duplicate database items starting from the beginning of the
@@ -584,7 +563,7 @@ where
         Value: TableObject<'tx>,
     {
         let Some(first) = self.set_range(key)? else {
-            return Ok(IterDup::end_from_ref(self));
+            return Ok(IterDup::<K, Key, Value>::end_from_ref(self));
         };
 
         Ok(IterDup::from_ref_with(self, first))
@@ -606,6 +585,185 @@ where
         };
 
         Ok(IterDupVals::from_ref_with(self, first))
+    }
+
+    /// [`DatabaseFlags::DUP_FIXED`]-only: Iterate over all fixed-size duplicate
+    /// values starting from the beginning of the database.
+    ///
+    /// This iterator efficiently fetches pages of fixed-size values and yields
+    /// them individually, providing a flattened view of the DUPFIXED table.
+    ///
+    /// The `VALUE_SIZE` const generic must match the fixed size of values in
+    /// the database.
+    ///
+    /// Returns [`crate::MdbxError::RequiresDupFixed`] if the database does not have the
+    /// [`DatabaseFlags::DUP_FIXED`] flag set.
+    ///
+    /// # Correctness
+    ///
+    /// The `VALUE_SIZE` const generic must exactly match the fixed value size
+    /// in the database. See [`IterDupFixed`] for details on mismatch behavior.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use signet_libmdbx::{Environment, DatabaseFlags, WriteFlags};
+    /// # use std::path::Path;
+    /// # let env = Environment::builder().open(Path::new("/tmp/ex")).unwrap();
+    /// let txn = env.begin_ro_sync().unwrap();
+    /// let db = txn.open_db(None).unwrap();
+    /// let mut cursor = txn.cursor(db).unwrap();
+    ///
+    /// // Iterate over 8-byte values
+    /// for result in cursor.iter_dupfixed_start::<Vec<u8>, 8>().unwrap() {
+    ///     let (key, value) = result.unwrap();
+    ///     println!("{:?} => {:?}", key, value);
+    /// }
+    /// ```
+    pub fn iter_dupfixed_start<'cur, Key, const VALUE_SIZE: usize>(
+        &'cur mut self,
+    ) -> ReadResult<IterDupFixed<'tx, 'cur, K, Key, VALUE_SIZE>>
+    where
+        'tx: 'cur,
+        Key: TableObject<'tx> + Clone,
+    {
+        #[cfg(debug_assertions)]
+        {
+            assertions::debug_assert_dup_fixed(self.db_flags());
+            assert!(VALUE_SIZE > 0, "VALUE_SIZE must be non-zero");
+        }
+
+        // Position at first key
+        let Some((_key, _value)) = self.first::<Key, ()>()? else {
+            return Ok(IterDupFixed::end_from_ref(self));
+        };
+
+        // Get first page of values for current key
+        let Some(page) = self.get_multiple::<std::borrow::Cow<'tx, [u8]>>()? else {
+            return Ok(IterDupFixed::end_from_ref(self));
+        };
+
+        // Re-fetch the key since get_multiple doesn't return it
+        let Some((key, _)) = self.get_current::<Key, ()>()? else {
+            return Ok(IterDupFixed::end_from_ref(self));
+        };
+
+        Ok(IterDupFixed::from_ref_with(self, key, page))
+    }
+
+    /// [`DatabaseFlags::DUP_FIXED`]-only: Iterate over all fixed-size duplicate
+    /// values starting from the given key or the first key greater than it.
+    ///
+    /// This iterator efficiently fetches pages of fixed-size values and yields
+    /// them individually, providing a flattened view of the DUPFIXED table.
+    ///
+    /// The `VALUE_SIZE` const generic must match the fixed size of values in
+    /// the database.
+    ///
+    /// # Correctness
+    ///
+    /// The `VALUE_SIZE` const generic must exactly match the fixed value size
+    /// in the database. See [`IterDupFixed`] for details on mismatch behavior.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use signet_libmdbx::{Environment, DatabaseFlags, WriteFlags};
+    /// # use std::path::Path;
+    /// # let env = Environment::builder().open(Path::new("/tmp/ex")).unwrap();
+    /// let txn = env.begin_ro_sync().unwrap();
+    /// let db = txn.open_db(None).unwrap();
+    /// let mut cursor = txn.cursor(db).unwrap();
+    ///
+    /// // Iterate over 8-byte values starting from key "start"
+    /// for result in cursor.iter_dupfixed_from::<Vec<u8>, 8>(b"start").unwrap() {
+    ///     let (key, value) = result.unwrap();
+    ///     println!("{:?} => {:?}", key, value);
+    /// }
+    /// ```
+    pub fn iter_dupfixed_from<'cur, Key, const VALUE_SIZE: usize>(
+        &'cur mut self,
+        key: &[u8],
+    ) -> ReadResult<IterDupFixed<'tx, 'cur, K, Key, VALUE_SIZE>>
+    where
+        'tx: 'cur,
+        Key: TableObject<'tx> + Clone,
+    {
+        #[cfg(debug_assertions)]
+        {
+            assertions::debug_assert_dup_fixed(self.db_flags());
+            assert!(VALUE_SIZE > 0, "VALUE_SIZE must be non-zero");
+        }
+
+        // Position at first key >= the requested key
+        let Some((found_key, _)) = self.set_range::<Key, ()>(key)? else {
+            return Ok(IterDupFixed::end_from_ref(self));
+        };
+
+        // Get first page for this key
+        let Some(page) = self.get_multiple::<std::borrow::Cow<'tx, [u8]>>()? else {
+            return Ok(IterDupFixed::end_from_ref(self));
+        };
+
+        Ok(IterDupFixed::from_ref_with(self, found_key, page))
+    }
+
+    /// [`DatabaseFlags::DUP_FIXED`]-only: Iterate over all fixed-size duplicate
+    /// values for a specific key.
+    ///
+    /// Unlike [`Self::iter_dupfixed_start`] and [`Self::iter_dupfixed_from`]
+    /// which iterate across all keys, this iterator only yields values for
+    /// the specified key. When all values for that key are exhausted,
+    /// iteration stops.
+    ///
+    /// The `VALUE_SIZE` const generic must match the fixed size of values in
+    /// the database.
+    ///
+    /// # Correctness
+    ///
+    /// The `VALUE_SIZE` const generic must exactly match the fixed value size
+    /// in the database. See [`IterDupFixedOfKey`] for details on mismatch
+    /// behavior.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use signet_libmdbx::{Environment, DatabaseFlags, WriteFlags};
+    /// # use std::path::Path;
+    /// # let env = Environment::builder().open(Path::new("/tmp/ex")).unwrap();
+    /// let txn = env.begin_ro_sync().unwrap();
+    /// let db = txn.open_db(None).unwrap();
+    /// let mut cursor = txn.cursor(db).unwrap();
+    ///
+    /// // Iterate over 8-byte values for a specific key
+    /// for result in cursor.iter_dupfixed_of::<8>(b"my_key").unwrap() {
+    ///     let value: [u8; 8] = result.unwrap();
+    ///     println!("value: {:?}", value);
+    /// }
+    /// ```
+    ///
+    /// [`IterDupFixedOfKey`]: crate::tx::iter::IterDupFixedOfKey
+    pub fn iter_dupfixed_of<'cur, const VALUE_SIZE: usize>(
+        &'cur mut self,
+        key: &[u8],
+    ) -> ReadResult<IterDupFixedOfKey<'tx, 'cur, K, VALUE_SIZE>>
+    where
+        'tx: 'cur,
+    {
+        #[cfg(debug_assertions)]
+        {
+            assertions::debug_assert_dup_fixed(self.db_flags());
+            assertions::debug_assert_integer_key(self.db_flags(), key);
+            assert!(VALUE_SIZE > 0, "VALUE_SIZE must be non-zero");
+        }
+
+        let Some((_key, page)) =
+            self.seek_and_get_multiple::<(), std::borrow::Cow<'tx, [u8]>>(key)?
+        else {
+            return Ok(IterDupFixedOfKey::end_from_ref(self));
+        };
+
+        Ok(IterDupFixedOfKey::from_ref_with(self, page))
     }
 }
 
@@ -640,18 +798,58 @@ impl<'tx, K: TransactionKind + WriteMarker> Cursor<'tx, K> {
         .map(drop)
     }
 
-    /// Deletes the current key/data pair.
-    ///
-    /// ### Flags
-    ///
-    /// [`WriteFlags::NO_DUP_DATA`] may be used to delete all data items for the
-    /// current key, if the database was opened with [`DatabaseFlags::DUP_SORT`].
-    pub fn del(&mut self, flags: WriteFlags) -> MdbxResult<()> {
+    fn del_inner(&mut self, flags: WriteFlags) -> MdbxResult<()> {
         mdbx_result(
             self.access
                 .with_txn_ptr(|_| unsafe { ffi::mdbx_cursor_del(self.cursor, flags.bits()) }),
         )
         .map(drop)
+    }
+
+    /// Deletes the current key/data pair.
+    ///
+    /// In order to delete all data items for a key in a
+    /// [`DatabaseFlags::DUP_SORT`] database, see [`Cursor::del_all_dups`].
+    pub fn del(&mut self) -> MdbxResult<()> {
+        self.del_inner(WriteFlags::CURRENT)
+    }
+
+    /// Deletes all duplicate data items for the current key.
+    ///
+    /// This is a [`DatabaseFlags::DUP_SORT`]-only operation that efficiently
+    /// removes all values associated with the current key in a single call.
+    ///
+    /// The cursor must be positioned at a valid key before calling this method.
+    /// After deletion, the cursor position is undefined.
+    pub fn del_all_dups(&mut self) -> MdbxResult<()> {
+        #[cfg(debug_assertions)]
+        assertions::debug_assert_dup_sort(self.db_flags());
+        self.del_inner(WriteFlags::ALLDUPS)
+    }
+
+    /// Delete all duplicate data items for the specified key.
+    ///
+    /// This is a [`DatabaseFlags::DUP_SORT`]-only operation that efficiently
+    /// removes all values associated with the given key in a single call.
+    ///
+    /// If the key does not exist, no action is taken.
+    pub fn del_all_dups_of(&mut self, key: &[u8]) -> MdbxResult<()> {
+        #[cfg(debug_assertions)]
+        assertions::debug_assert_dup_sort(self.db_flags());
+
+        // Position at the key. Convert the error to MdbxResult.
+        let found = self.set::<()>(key).map_err(|e| match e {
+            ReadError::Mdbx(e) => e,
+            _ => unreachable!("() can always be decoded"),
+        })?;
+
+        if found.is_none() {
+            // Key not found, nothing to delete
+            return Ok(());
+        }
+
+        // Delete all duplicates for the current key
+        self.del_inner(WriteFlags::ALLDUPS)
     }
 
     /// Appends a key/data pair to the end of the database.
@@ -700,13 +898,11 @@ impl<'tx, K: TransactionKind + WriteMarker> Cursor<'tx, K> {
     /// than, for [`DatabaseFlags::REVERSE_DUP`] tables). This is more efficient
     /// than [`Cursor::put`] when adding duplicates in sorted order.
     ///
-    /// Returns [`MdbxError::RequiresDupSort`] if the database does not have the
-    /// [`DatabaseFlags::DUP_SORT`] flag set.
-    ///
     /// In debug builds, this method asserts that the data ordering constraint
     /// is satisfied.
     pub fn append_dup(&mut self, key: &[u8], data: &[u8]) -> MdbxResult<()> {
-        self.require_dup_sort()?;
+        #[cfg(debug_assertions)]
+        assertions::debug_assert_dup_sort(self.db_flags());
 
         let key_val: ffi::MDBX_val =
             ffi::MDBX_val { iov_len: key.len(), iov_base: key.as_ptr() as *mut c_void };

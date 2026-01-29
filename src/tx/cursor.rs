@@ -798,18 +798,20 @@ impl<'tx, K: TransactionKind + WriteMarker> Cursor<'tx, K> {
         .map(drop)
     }
 
-    /// Deletes the current key/data pair.
-    ///
-    /// ### Flags
-    ///
-    /// [`WriteFlags::NO_DUP_DATA`] may be used to delete all data items for the
-    /// current key, if the database was opened with [`DatabaseFlags::DUP_SORT`].
-    pub fn del(&mut self, flags: WriteFlags) -> MdbxResult<()> {
+    fn del_inner(&mut self, flags: WriteFlags) -> MdbxResult<()> {
         mdbx_result(
             self.access
                 .with_txn_ptr(|_| unsafe { ffi::mdbx_cursor_del(self.cursor, flags.bits()) }),
         )
         .map(drop)
+    }
+
+    /// Deletes the current key/data pair.
+    ///
+    /// In order to delete all data items for a key in a
+    /// [`DatabaseFlags::DUP_SORT`] database, see [`Cursor::del_all_dups`].
+    pub fn del(&mut self) -> MdbxResult<()> {
+        self.del_inner(WriteFlags::CURRENT)
     }
 
     /// Deletes all duplicate data items for the current key.
@@ -822,7 +824,7 @@ impl<'tx, K: TransactionKind + WriteMarker> Cursor<'tx, K> {
     pub fn del_all_dups(&mut self) -> MdbxResult<()> {
         #[cfg(debug_assertions)]
         assertions::debug_assert_dup_sort(self.db_flags());
-        self.del(WriteFlags::ALLDUPS)
+        self.del_inner(WriteFlags::ALLDUPS)
     }
 
     /// Delete all duplicate data items for the specified key.
@@ -847,7 +849,7 @@ impl<'tx, K: TransactionKind + WriteMarker> Cursor<'tx, K> {
         }
 
         // Delete all duplicates for the current key
-        self.del_all_dups()
+        self.del_inner(WriteFlags::ALLDUPS)
     }
 
     /// Appends a key/data pair to the end of the database.

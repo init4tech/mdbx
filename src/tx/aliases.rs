@@ -94,33 +94,33 @@ pub type RwIterUnsync<'tx, 'cur, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> =
     IterKeyVals<'tx, 'cur, Rw, Key, Value>;
 
 /// A flattening DUPFIXED iterator for a synchronized read-only transaction.
-pub type RoDupFixedIterSync<'tx, 'cur, Key = Cow<'tx, [u8]>, const VALUE_SIZE: usize = 0> =
-    IterDupFixed<'tx, 'cur, RoSync, Key, VALUE_SIZE>;
+pub type RoDupFixedIterSync<'tx, 'cur, Key = Cow<'tx, [u8]>, Value = Vec<u8>> =
+    IterDupFixed<'tx, 'cur, RoSync, Key, Value>;
 
 /// A flattening DUPFIXED iterator for a synchronized read-write transaction.
-pub type RwDupFixedIterSync<'tx, 'cur, Key = Cow<'tx, [u8]>, const VALUE_SIZE: usize = 0> =
-    IterDupFixed<'tx, 'cur, RwSync, Key, VALUE_SIZE>;
+pub type RwDupFixedIterSync<'tx, 'cur, Key = Cow<'tx, [u8]>, Value = Vec<u8>> =
+    IterDupFixed<'tx, 'cur, RwSync, Key, Value>;
 
 /// A flattening DUPFIXED iterator for an unsynchronized read-only transaction.
-pub type RoDupFixedIterUnsync<'tx, 'cur, Key = Cow<'tx, [u8]>, const VALUE_SIZE: usize = 0> =
-    IterDupFixed<'tx, 'cur, Ro, Key, VALUE_SIZE>;
+pub type RoDupFixedIterUnsync<'tx, 'cur, Key = Cow<'tx, [u8]>, Value = Vec<u8>> =
+    IterDupFixed<'tx, 'cur, Ro, Key, Value>;
 
 /// A flattening DUPFIXED iterator for an unsynchronized read-write transaction.
-pub type RwDupFixedIterUnsync<'tx, 'cur, Key = Cow<'tx, [u8]>, const VALUE_SIZE: usize = 0> =
-    IterDupFixed<'tx, 'cur, Rw, Key, VALUE_SIZE>;
+pub type RwDupFixedIterUnsync<'tx, 'cur, Key = Cow<'tx, [u8]>, Value = Vec<u8>> =
+    IterDupFixed<'tx, 'cur, Rw, Key, Value>;
 
 /// A single-key DUPFIXED iterator for a synchronized read-only transaction.
-pub type RoDupFixedIterOfKeySync<'tx, 'cur, const VALUE_SIZE: usize = 0> =
-    IterDupFixedOfKey<'tx, 'cur, RoSync, VALUE_SIZE>;
+pub type RoDupFixedIterOfKeySync<'tx, 'cur, Value = Vec<u8>> =
+    IterDupFixedOfKey<'tx, 'cur, RoSync, Value>;
 
 /// A single-key DUPFIXED iterator for a synchronized read-write transaction.
-pub type RwDupFixedIterOfKeySync<'tx, 'cur, const VALUE_SIZE: usize = 0> =
-    IterDupFixedOfKey<'tx, 'cur, RwSync, VALUE_SIZE>;
+pub type RwDupFixedIterOfKeySync<'tx, 'cur, Value = Vec<u8>> =
+    IterDupFixedOfKey<'tx, 'cur, RwSync, Value>;
 
 /// A single-key DUPFIXED iterator for an unsynchronized read-only transaction.
-pub type RoDupFixedIterOfKeyUnsync<'tx, 'cur, const VALUE_SIZE: usize = 0> =
-    IterDupFixedOfKey<'tx, 'cur, Ro, VALUE_SIZE>;
+pub type RoDupFixedIterOfKeyUnsync<'tx, 'cur, Value = Vec<u8>> =
+    IterDupFixedOfKey<'tx, 'cur, Ro, Value>;
 
 /// A single-key DUPFIXED iterator for an unsynchronized read-write transaction.
-pub type RwDupFixedIterOfKeyUnsync<'tx, 'cur, const VALUE_SIZE: usize = 0> =
-    IterDupFixedOfKey<'tx, 'cur, Rw, VALUE_SIZE>;
+pub type RwDupFixedIterOfKeyUnsync<'tx, 'cur, Value = Vec<u8>> =
+    IterDupFixedOfKey<'tx, 'cur, Rw, Value>;

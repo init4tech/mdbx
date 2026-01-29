@@ -1,5 +1,6 @@
 use crate::{
-    Database, ReadError, ReadResult, TableObject, TransactionKind, codec_try_optional,
+    Database, ObjectLength, ReadError, ReadResult, TableObject, TableObjectOwned, TransactionKind,
+    codec_try_optional,
     error::{MdbxResult, mdbx_result},
     flags::*,
     tx::{
@@ -593,16 +594,12 @@ where
     /// This iterator efficiently fetches pages of fixed-size values and yields
     /// them individually, providing a flattened view of the DUPFIXED table.
     ///
-    /// The `VALUE_SIZE` const generic must match the fixed size of values in
-    /// the database.
+    /// The value size is determined at runtime from the first value in the
+    /// database. The `Value` type parameter must implement [`TableObjectOwned`]
+    /// for decoding values.
     ///
     /// Returns [`crate::MdbxError::RequiresDupFixed`] if the database does not have the
     /// [`DatabaseFlags::DUP_FIXED`] flag set.
-    ///
-    /// # Correctness
-    ///
-    /// The `VALUE_SIZE` const generic must exactly match the fixed value size
-    /// in the database. See [`IterDupFixed`] for details on mismatch behavior.
     ///
     /// # Example
     ///
@@ -614,29 +611,31 @@ where
     /// let db = txn.open_db(None).unwrap();
     /// let mut cursor = txn.cursor(db).unwrap();
     ///
-    /// // Iterate over 8-byte values
-    /// for result in cursor.iter_dupfixed_start::<Vec<u8>, 8>().unwrap() {
+    /// // Iterate over fixed-size values decoded as [u8; 8]
+    /// for result in cursor.iter_dupfixed_start::<Vec<u8>, [u8; 8]>().unwrap() {
     ///     let (key, value) = result.unwrap();
     ///     println!("{:?} => {:?}", key, value);
     /// }
     /// ```
-    pub fn iter_dupfixed_start<'cur, Key, const VALUE_SIZE: usize>(
+    pub fn iter_dupfixed_start<'cur, Key, Value>(
         &'cur mut self,
-    ) -> ReadResult<IterDupFixed<'tx, 'cur, K, Key, VALUE_SIZE>>
+    ) -> ReadResult<IterDupFixed<'tx, 'cur, K, Key, Value>>
     where
         'tx: 'cur,
         Key: TableObject<'tx> + Clone,
+        Value: TableObjectOwned,
     {
         #[cfg(debug_assertions)]
-        {
-            assertions::debug_assert_dup_fixed(self.db_flags());
-            assert!(VALUE_SIZE > 0, "VALUE_SIZE must be non-zero");
-        }
+        assertions::debug_assert_dup_fixed(self.db_flags());
 
-        // Position at first key
-        let Some((_key, _value)) = self.first::<Key, ()>()? else {
+        // Position at first key and get value size via ObjectLength
+        let Some((_key, ObjectLength(value_size))) = self.first::<Key, ObjectLength>()? else {
             return Ok(IterDupFixed::end_from_ref(self));
         };
+
+        if value_size == 0 {
+            return Ok(IterDupFixed::end_from_ref(self));
+        }
 
         // Get first page of values for current key
         let Some(page) = self.get_multiple::<std::borrow::Cow<'tx, [u8]>>()? else {
@@ -648,7 +647,7 @@ where
             return Ok(IterDupFixed::end_from_ref(self));
         };
 
-        Ok(IterDupFixed::from_ref_with(self, key, page))
+        Ok(IterDupFixed::from_ref_with(self, key, page, value_size))
     }
 
     /// [`DatabaseFlags::DUP_FIXED`]-only: Iterate over all fixed-size duplicate
@@ -657,13 +656,9 @@ where
     /// This iterator efficiently fetches pages of fixed-size values and yields
     /// them individually, providing a flattened view of the DUPFIXED table.
     ///
-    /// The `VALUE_SIZE` const generic must match the fixed size of values in
-    /// the database.
-    ///
-    /// # Correctness
-    ///
-    /// The `VALUE_SIZE` const generic must exactly match the fixed value size
-    /// in the database. See [`IterDupFixed`] for details on mismatch behavior.
+    /// The value size is determined at runtime from the first value in the
+    /// database. The `Value` type parameter must implement [`TableObjectOwned`]
+    /// for decoding values.
     ///
     /// # Example
     ///
@@ -675,37 +670,41 @@ where
     /// let db = txn.open_db(None).unwrap();
     /// let mut cursor = txn.cursor(db).unwrap();
     ///
-    /// // Iterate over 8-byte values starting from key "start"
-    /// for result in cursor.iter_dupfixed_from::<Vec<u8>, 8>(b"start").unwrap() {
+    /// // Iterate over fixed-size values starting from key "start"
+    /// for result in cursor.iter_dupfixed_from::<Vec<u8>, [u8; 8]>(b"start").unwrap() {
     ///     let (key, value) = result.unwrap();
     ///     println!("{:?} => {:?}", key, value);
     /// }
     /// ```
-    pub fn iter_dupfixed_from<'cur, Key, const VALUE_SIZE: usize>(
+    pub fn iter_dupfixed_from<'cur, Key, Value>(
         &'cur mut self,
         key: &[u8],
-    ) -> ReadResult<IterDupFixed<'tx, 'cur, K, Key, VALUE_SIZE>>
+    ) -> ReadResult<IterDupFixed<'tx, 'cur, K, Key, Value>>
     where
         'tx: 'cur,
         Key: TableObject<'tx> + Clone,
+        Value: TableObjectOwned,
     {
         #[cfg(debug_assertions)]
-        {
-            assertions::debug_assert_dup_fixed(self.db_flags());
-            assert!(VALUE_SIZE > 0, "VALUE_SIZE must be non-zero");
-        }
+        assertions::debug_assert_dup_fixed(self.db_flags());
 
-        // Position at first key >= the requested key
-        let Some((found_key, _)) = self.set_range::<Key, ()>(key)? else {
+        // Position at first key >= the requested key and get value size
+        let Some((found_key, ObjectLength(value_size))) =
+            self.set_range::<Key, ObjectLength>(key)?
+        else {
             return Ok(IterDupFixed::end_from_ref(self));
         };
+
+        if value_size == 0 {
+            return Ok(IterDupFixed::end_from_ref(self));
+        }
 
         // Get first page for this key
         let Some(page) = self.get_multiple::<std::borrow::Cow<'tx, [u8]>>()? else {
             return Ok(IterDupFixed::end_from_ref(self));
         };
 
-        Ok(IterDupFixed::from_ref_with(self, found_key, page))
+        Ok(IterDupFixed::from_ref_with(self, found_key, page, value_size))
     }
 
     /// [`DatabaseFlags::DUP_FIXED`]-only: Iterate over all fixed-size duplicate
@@ -716,14 +715,9 @@ where
     /// the specified key. When all values for that key are exhausted,
     /// iteration stops.
     ///
-    /// The `VALUE_SIZE` const generic must match the fixed size of values in
-    /// the database.
-    ///
-    /// # Correctness
-    ///
-    /// The `VALUE_SIZE` const generic must exactly match the fixed value size
-    /// in the database. See [`IterDupFixedOfKey`] for details on mismatch
-    /// behavior.
+    /// The value size is determined at runtime from the first value in the
+    /// database. The `Value` type parameter must implement [`TableObjectOwned`]
+    /// for decoding values.
     ///
     /// # Example
     ///
@@ -735,35 +729,43 @@ where
     /// let db = txn.open_db(None).unwrap();
     /// let mut cursor = txn.cursor(db).unwrap();
     ///
-    /// // Iterate over 8-byte values for a specific key
-    /// for result in cursor.iter_dupfixed_of::<8>(b"my_key").unwrap() {
+    /// // Iterate over fixed-size values for a specific key
+    /// for result in cursor.iter_dupfixed_of::<[u8; 8]>(b"my_key").unwrap() {
     ///     let value: [u8; 8] = result.unwrap();
     ///     println!("value: {:?}", value);
     /// }
     /// ```
     ///
     /// [`IterDupFixedOfKey`]: crate::tx::iter::IterDupFixedOfKey
-    pub fn iter_dupfixed_of<'cur, const VALUE_SIZE: usize>(
+    pub fn iter_dupfixed_of<'cur, Value>(
         &'cur mut self,
         key: &[u8],
-    ) -> ReadResult<IterDupFixedOfKey<'tx, 'cur, K, VALUE_SIZE>>
+    ) -> ReadResult<IterDupFixedOfKey<'tx, 'cur, K, Value>>
     where
         'tx: 'cur,
+        Value: TableObjectOwned,
     {
         #[cfg(debug_assertions)]
         {
             assertions::debug_assert_dup_fixed(self.db_flags());
             assertions::debug_assert_integer_key(self.db_flags(), key);
-            assert!(VALUE_SIZE > 0, "VALUE_SIZE must be non-zero");
         }
 
-        let Some((_key, page)) =
-            self.seek_and_get_multiple::<(), std::borrow::Cow<'tx, [u8]>>(key)?
-        else {
+        // Position at key and get value size from the first value
+        let Some(ObjectLength(value_size)) = self.set::<ObjectLength>(key)? else {
             return Ok(IterDupFixedOfKey::end_from_ref(self));
         };
 
-        Ok(IterDupFixedOfKey::from_ref_with(self, page))
+        if value_size == 0 {
+            return Ok(IterDupFixedOfKey::end_from_ref(self));
+        }
+
+        // Get first page of values (cursor is already positioned at the key)
+        let Some(page) = self.get_multiple::<std::borrow::Cow<'tx, [u8]>>()? else {
+            return Ok(IterDupFixedOfKey::end_from_ref(self));
+        };
+
+        Ok(IterDupFixedOfKey::from_ref_with(self, page, value_size))
     }
 }
 

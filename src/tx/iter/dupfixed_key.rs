@@ -1,6 +1,6 @@
 //! Single-key flattening iterator for DUPFIXED tables.
 
-use crate::{Cursor, ReadResult, TransactionKind};
+use crate::{Cursor, ReadResult, TableObjectOwned, TransactionKind};
 use std::{borrow::Cow, marker::PhantomData};
 
 /// A single-key flattening iterator over DUPFIXED tables.
@@ -14,21 +14,13 @@ use std::{borrow::Cow, marker::PhantomData};
 /// - `'tx`: The transaction lifetime
 /// - `'cur`: The cursor lifetime
 /// - `K`: The transaction kind marker
-/// - `VALUE_SIZE`: The fixed size of each value in bytes
+/// - `Value`: The value type (must implement [`TableObjectOwned`])
 ///
 /// # Correctness
 ///
-/// The `VALUE_SIZE` const generic **must** match the fixed value size stored
-/// in the database. MDBX does not validate this at runtime. If mismatched:
-///
-/// - **Too large**: Values are skipped; the iterator yields fewer items than
-///   exist, potentially with misaligned data.
-/// - **Too small**: The iterator yields more items than exist, each containing
-///   partial or corrupted data from adjacent values.
-/// - **Zero**: Causes an infinite loop (caught by debug assertion).
-///
-/// The correct value size is determined by the size of values written to the
-/// DUPFIXED database. All values under a given key must have the same size.
+/// The value size is determined at construction time from the first value
+/// in the database. All values in a DUPFIXED database must have the same
+/// size.
 ///
 /// # Zero-Copy Operation
 ///
@@ -36,34 +28,46 @@ use std::{borrow::Cow, marker::PhantomData};
 /// - In read-only transactions, values are borrowed directly from memory-mapped pages
 /// - In read-write transactions with clean pages, values are also borrowed
 /// - Only dirty pages (modified but not committed) require copying
-pub struct IterDupFixedOfKey<'tx, 'cur, K: TransactionKind, const VALUE_SIZE: usize = 0> {
+pub struct IterDupFixedOfKey<'tx, 'cur, K: TransactionKind, Value = Vec<u8>> {
     cursor: Cow<'cur, Cursor<'tx, K>>,
     /// The current page of values.
     current_page: Cow<'tx, [u8]>,
     /// Current offset into the page, incremented as values are yielded.
     page_offset: usize,
+    /// The fixed value size, determined at construction.
+    value_size: usize,
     /// When true, the iterator is exhausted and will always return `None`.
     exhausted: bool,
-    _marker: PhantomData<fn() -> ()>,
+    _marker: PhantomData<fn() -> Value>,
 }
 
-impl<K, const VALUE_SIZE: usize> core::fmt::Debug for IterDupFixedOfKey<'_, '_, K, VALUE_SIZE>
+impl<K, Value> core::fmt::Debug for IterDupFixedOfKey<'_, '_, K, Value>
 where
     K: TransactionKind,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let remaining = self.current_page.len().saturating_sub(self.page_offset) / VALUE_SIZE;
+        let remaining = if self.value_size > 0 {
+            self.current_page.len().saturating_sub(self.page_offset) / self.value_size
+        } else {
+            0
+        };
         f.debug_struct("IterDupFixedOfKey")
             .field("exhausted", &self.exhausted)
+            .field("value_size", &self.value_size)
             .field("remaining_in_page", &remaining)
             .finish()
     }
 }
 
-impl<'tx: 'cur, 'cur, K, const VALUE_SIZE: usize> IterDupFixedOfKey<'tx, 'cur, K, VALUE_SIZE>
+impl<'tx: 'cur, 'cur, K, Value> IterDupFixedOfKey<'tx, 'cur, K, Value>
 where
     K: TransactionKind,
 {
+    /// Returns the fixed value size (determined at construction).
+    pub const fn value_size(&self) -> usize {
+        self.value_size
+    }
+
     /// Create a new, exhausted iterator.
     ///
     /// Iteration will immediately return `None`.
@@ -72,6 +76,7 @@ where
             cursor,
             current_page: Cow::Borrowed(&[]),
             page_offset: 0,
+            value_size: 0,
             exhausted: true,
             _marker: PhantomData,
         }
@@ -82,33 +87,47 @@ where
         Self::new_end(Cow::Borrowed(cursor))
     }
 
-    /// Create a new iterator with the given initial page.
-    pub(crate) fn new_with(cursor: Cow<'cur, Cursor<'tx, K>>, page: Cow<'tx, [u8]>) -> Self {
+    /// Create a new iterator with the given initial page and value size.
+    pub(crate) fn new_with(
+        cursor: Cow<'cur, Cursor<'tx, K>>,
+        page: Cow<'tx, [u8]>,
+        value_size: usize,
+    ) -> Self {
         IterDupFixedOfKey {
             cursor,
             current_page: page,
             page_offset: 0,
+            value_size,
             exhausted: false,
             _marker: PhantomData,
         }
     }
 
-    /// Create a new iterator from a mutable reference with initial page.
-    pub(crate) fn from_ref_with(cursor: &'cur mut Cursor<'tx, K>, page: Cow<'tx, [u8]>) -> Self {
-        Self::new_with(Cow::Borrowed(cursor), page)
+    /// Create a new iterator from a mutable reference with initial page and
+    /// value size.
+    pub(crate) fn from_ref_with(
+        cursor: &'cur mut Cursor<'tx, K>,
+        page: Cow<'tx, [u8]>,
+        value_size: usize,
+    ) -> Self {
+        Self::new_with(Cow::Borrowed(cursor), page, value_size)
     }
 }
 
-impl<'tx: 'cur, 'cur, K, const VALUE_SIZE: usize> IterDupFixedOfKey<'tx, 'cur, K, VALUE_SIZE>
+impl<'tx: 'cur, 'cur, K, Value> IterDupFixedOfKey<'tx, 'cur, K, Value>
 where
     K: TransactionKind,
 {
     /// Consume the next value from the current page.
     ///
-    /// Returns `Some(Cow<'tx, [u8]>)` containing exactly `VALUE_SIZE` bytes,
+    /// Returns `Some(Cow<'tx, [u8]>)` containing exactly `value_size` bytes,
     /// or `None` if the page is exhausted.
     fn consume_value(&mut self) -> Option<Cow<'tx, [u8]>> {
-        let end = self.page_offset.checked_add(VALUE_SIZE)?;
+        if self.value_size == 0 {
+            return None;
+        }
+
+        let end = self.page_offset.checked_add(self.value_size)?;
         if end > self.current_page.len() {
             return None;
         }
@@ -148,7 +167,7 @@ where
     /// Borrow the next value from the iterator.
     ///
     /// Returns `Ok(Some(value))` where `value` is a `Cow<'tx, [u8]>` of exactly
-    /// `VALUE_SIZE` bytes.
+    /// `value_size` bytes.
     ///
     /// Returns `Ok(None)` when the iterator is exhausted.
     pub fn borrow_next(&mut self) -> ReadResult<Option<Cow<'tx, [u8]>>> {
@@ -173,25 +192,22 @@ where
 
     /// Get the next value as owned data.
     ///
-    /// Returns `Ok(Some([u8; VALUE_SIZE]))` where the value is copied
-    /// into a fixed-size array.
-    pub fn owned_next(&mut self) -> ReadResult<Option<[u8; VALUE_SIZE]>> {
-        self.borrow_next().map(|opt| {
-            opt.map(|value| {
-                let mut arr = [0u8; VALUE_SIZE];
-                arr.copy_from_slice(&value);
-                arr
-            })
-        })
+    /// Returns `Ok(Some(Value))` where the value is decoded using
+    /// [`TableObjectOwned::decode`].
+    pub fn owned_next(&mut self) -> ReadResult<Option<Value>>
+    where
+        Value: TableObjectOwned,
+    {
+        self.borrow_next()?.map(|cow| Value::decode(&cow)).transpose()
     }
 }
 
-impl<'tx: 'cur, 'cur, K, const VALUE_SIZE: usize> Iterator
-    for IterDupFixedOfKey<'tx, 'cur, K, VALUE_SIZE>
+impl<'tx: 'cur, 'cur, K, Value> Iterator for IterDupFixedOfKey<'tx, 'cur, K, Value>
 where
     K: TransactionKind,
+    Value: TableObjectOwned,
 {
-    type Item = ReadResult<[u8; VALUE_SIZE]>;
+    type Item = ReadResult<Value>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.owned_next().transpose()

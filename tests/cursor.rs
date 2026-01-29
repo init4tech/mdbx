@@ -893,7 +893,7 @@ fn test_iter_dupfixed_basic_impl<RwTx, RoTx>(
     let mut cursor = txn.cursor(db).unwrap();
 
     let results: Vec<(Vec<u8>, [u8; 4])> =
-        cursor.iter_dupfixed_start::<Vec<u8>, 4>().unwrap().map(|r| r.unwrap()).collect();
+        cursor.iter_dupfixed_start::<Vec<u8>, [u8; 4]>().unwrap().map(|r| r.unwrap()).collect();
 
     assert_eq!(results.len(), 5);
     assert_eq!(results[0], (b"key1".to_vec(), 1u32.to_le_bytes()));
@@ -939,8 +939,11 @@ fn test_iter_dupfixed_from_impl<RwTx, RoTx>(
     let db = txn.open_db(None).unwrap();
     let mut cursor = txn.cursor(db).unwrap();
 
-    let results: Vec<(Vec<u8>, [u8; 4])> =
-        cursor.iter_dupfixed_from::<Vec<u8>, 4>(b"bbb").unwrap().map(|r| r.unwrap()).collect();
+    let results: Vec<(Vec<u8>, [u8; 4])> = cursor
+        .iter_dupfixed_from::<Vec<u8>, [u8; 4]>(b"bbb")
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
 
     assert_eq!(results.len(), 3);
     assert_eq!(results[0], (b"bbb".to_vec(), 2u32.to_le_bytes()));
@@ -978,7 +981,7 @@ fn test_iter_dupfixed_empty_impl<RwTx, RoTx>(
     let mut cursor = txn.cursor(db).unwrap();
 
     let results: Vec<(Vec<u8>, [u8; 4])> =
-        cursor.iter_dupfixed_start::<Vec<u8>, 4>().unwrap().map(|r| r.unwrap()).collect();
+        cursor.iter_dupfixed_start::<Vec<u8>, [u8; 4]>().unwrap().map(|r| r.unwrap()).collect();
 
     assert!(results.is_empty());
 }
@@ -1028,7 +1031,7 @@ fn test_iter_dupfixed_many_values_impl<RwTx, RoTx>(
     let mut cursor = txn.cursor(db).unwrap();
 
     let results: Vec<(Vec<u8>, [u8; 4])> =
-        cursor.iter_dupfixed_start::<Vec<u8>, 4>().unwrap().map(|r| r.unwrap()).collect();
+        cursor.iter_dupfixed_start::<Vec<u8>, [u8; 4]>().unwrap().map(|r| r.unwrap()).collect();
 
     // Verify count
     assert_eq!(results.len(), 1000);
@@ -1082,8 +1085,11 @@ fn test_iter_dupfixed_from_nonexistent_key_impl<RwTx, RoTx>(
     let mut cursor = txn.cursor(db).unwrap();
 
     // Start from "bbb" which doesn't exist - should find "ccc"
-    let results: Vec<(Vec<u8>, [u8; 4])> =
-        cursor.iter_dupfixed_from::<Vec<u8>, 4>(b"bbb").unwrap().map(|r| r.unwrap()).collect();
+    let results: Vec<(Vec<u8>, [u8; 4])> = cursor
+        .iter_dupfixed_from::<Vec<u8>, [u8; 4]>(b"bbb")
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
 
     assert_eq!(results.len(), 1);
     assert_eq!(results[0], (b"ccc".to_vec(), 2u32.to_le_bytes()));
@@ -1119,8 +1125,11 @@ fn test_iter_dupfixed_from_past_end_impl<RwTx, RoTx>(
     let mut cursor = txn.cursor(db).unwrap();
 
     // Start from "zzz" which is past all keys
-    let results: Vec<(Vec<u8>, [u8; 4])> =
-        cursor.iter_dupfixed_from::<Vec<u8>, 4>(b"zzz").unwrap().map(|r| r.unwrap()).collect();
+    let results: Vec<(Vec<u8>, [u8; 4])> = cursor
+        .iter_dupfixed_from::<Vec<u8>, [u8; 4]>(b"zzz")
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
 
     assert!(results.is_empty());
 }
@@ -1173,7 +1182,7 @@ fn test_iter_dupfixed_of_impl<RwTx, RoTx>(
     let mut cursor = txn.cursor(db).unwrap();
 
     let results: Vec<[u8; 4]> =
-        cursor.iter_dupfixed_of::<4>(b"key2").unwrap().map(|r| r.unwrap()).collect();
+        cursor.iter_dupfixed_of::<[u8; 4]>(b"key2").unwrap().map(|r| r.unwrap()).collect();
 
     // Should only contain key2's values
     assert_eq!(results.len(), 2);
@@ -1214,7 +1223,7 @@ fn test_iter_dupfixed_of_nonexistent_key_impl<RwTx, RoTx>(
 
     // Seek nonexistent key "bbb" - should return empty iterator
     let results: Vec<[u8; 4]> =
-        cursor.iter_dupfixed_of::<4>(b"bbb").unwrap().map(|r| r.unwrap()).collect();
+        cursor.iter_dupfixed_of::<[u8; 4]>(b"bbb").unwrap().map(|r| r.unwrap()).collect();
 
     assert!(results.is_empty());
 }
@@ -1264,7 +1273,7 @@ fn test_iter_dupfixed_of_many_values_impl<RwTx, RoTx>(
     let mut cursor = txn.cursor(db).unwrap();
 
     let results: Vec<[u8; 4]> =
-        cursor.iter_dupfixed_of::<4>(b"target").unwrap().map(|r| r.unwrap()).collect();
+        cursor.iter_dupfixed_of::<[u8; 4]>(b"target").unwrap().map(|r| r.unwrap()).collect();
 
     // Verify count - should be exactly 1000
     assert_eq!(results.len(), 1000);
@@ -1535,6 +1544,6 @@ mod append_debug_tests {
         let txn = env.begin_ro_sync().unwrap();
         let db = txn.open_db(None).unwrap();
         let mut cursor = txn.cursor(db).unwrap();
-        let _ = cursor.iter_dupfixed_start::<Vec<u8>, 4>();
+        let _ = cursor.iter_dupfixed_start::<Vec<u8>, [u8; 4]>();
     }
 }

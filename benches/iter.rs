@@ -42,7 +42,7 @@ fn bench_iter_dupfixed(c: &mut Criterion) {
         b.iter(|| {
             let mut cursor = txn.cursor(db).unwrap();
             let mut count = 0u32;
-            for result in cursor.iter_dupfixed_start::<[u8; 3], VALUE_SIZE>().unwrap() {
+            for result in cursor.iter_dupfixed_start::<[u8; 3], [u8; VALUE_SIZE]>().unwrap() {
                 let (_key, value) = result.unwrap();
                 black_box(value);
                 count += 1;
@@ -82,7 +82,7 @@ fn bench_iter_dupfixed_sync(c: &mut Criterion) {
         b.iter(|| {
             let mut cursor = txn.cursor(db).unwrap();
             let mut count = 0u32;
-            for result in cursor.iter_dupfixed_start::<[u8; 3], VALUE_SIZE>().unwrap() {
+            for result in cursor.iter_dupfixed_start::<[u8; 3], [u8; VALUE_SIZE]>().unwrap() {
                 let (_key, value) = result.unwrap();
                 black_box(value);
                 count += 1;

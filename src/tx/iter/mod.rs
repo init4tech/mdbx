@@ -54,6 +54,10 @@
 //!     println!("{:?} => {:?}", key, value);
 //! }
 //! ```
+//!
+//! [`IterKeyVals`]: crate::tx::aliases::IterKeyVals
+//! [`IterDupVals`]: crate::tx::aliases::IterDupVals
+//! [`IterDupKeys`]: crate::tx::aliases::IterDupKeys
 
 mod base;
 pub use base::Iter;

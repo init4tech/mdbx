@@ -61,3 +61,7 @@ harness = false
 [[bench]]
 name = "iter"
 harness = false
+
+[[bench]]
+name = "deletion"
+harness = false

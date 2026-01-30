@@ -1,6 +1,7 @@
 //! Flattening iterator for DUPFIXED tables.
 
-use crate::{Cursor, ReadResult, TableObject, TransactionKind};
+use super::DupItem;
+use crate::{Cursor, ReadResult, TableObject, TableObjectOwned, TransactionKind};
 use std::{borrow::Cow, marker::PhantomData};
 
 /// A flattening iterator over DUPFIXED tables.
@@ -10,27 +11,23 @@ use std::{borrow::Cow, marker::PhantomData};
 /// store duplicate values with a fixed size, allowing MDBX to pack multiple
 /// values per page.
 ///
+/// To avoid unnecessary key cloning, this iterator yields [`DupItem::NewKey`]
+/// for the first value of each key, and [`DupItem::SameKey`] for subsequent
+/// values of the same key.
+///
 /// # Type Parameters
 ///
 /// - `'tx`: The transaction lifetime
 /// - `'cur`: The cursor lifetime
 /// - `K`: The transaction kind marker
 /// - `Key`: The key type (must implement [`TableObject`])
-/// - `VALUE_SIZE`: The fixed size of each value in bytes
+/// - `Value`: The value type (must implement [`TableObjectOwned`])
 ///
 /// # Correctness
 ///
-/// The `VALUE_SIZE` const generic **must** match the fixed value size stored
-/// in the database. MDBX does not validate this at runtime. If mismatched:
-///
-/// - **Too large**: Values are skipped; the iterator yields fewer items than
-///   exist, potentially with misaligned data.
-/// - **Too small**: The iterator yields more items than exist, each containing
-///   partial or corrupted data from adjacent values.
-/// - **Zero**: Causes an infinite loop (caught by debug assertion).
-///
-/// The correct value size is determined by the size of values written to the
-/// DUPFIXED database. All values under a given key must have the same size.
+/// The value size is determined at construction time from the first value
+/// in the database. All values in a DUPFIXED database must have the same
+/// size.
 ///
 /// # Zero-Copy Operation
 ///
@@ -42,7 +39,7 @@ use std::{borrow::Cow, marker::PhantomData};
 /// # Example
 ///
 /// ```no_run
-/// # use signet_libmdbx::{Environment, DatabaseFlags, WriteFlags};
+/// # use signet_libmdbx::{Environment, DatabaseFlags, WriteFlags, DupItem};
 /// # use std::path::Path;
 /// # let env = Environment::builder().open(Path::new("/tmp/dupfixed_example")).unwrap();
 /// // Create a DUPFIXED database
@@ -60,105 +57,118 @@ use std::{borrow::Cow, marker::PhantomData};
 /// let db = txn.open_db(Some("my_cool_db")).unwrap();
 /// let mut cursor = txn.cursor(db).unwrap();
 ///
-/// for result in cursor.iter_dupfixed_start::<Vec<u8>, 4>().unwrap() {
-///     let (key, value) = result.unwrap();
-///     let num = u32::from_le_bytes(value);
-///     println!("{:?} => {}", key, num);
+/// let mut current_key: Option<Vec<u8>> = None;
+/// for result in cursor.iter_dupfixed_start::<Vec<u8>, [u8; 4]>().unwrap() {
+///     match result.unwrap() {
+///         DupItem::NewKey(key, value) => {
+///             let num = u32::from_le_bytes(value);
+///             println!("New key {:?} => {}", key, num);
+///             current_key = Some(key);
+///         }
+///         DupItem::SameKey(value) => {
+///             let num = u32::from_le_bytes(value);
+///             println!("  Same key => {}", num);
+///         }
+///     }
 /// }
 /// ```
-pub struct IterDupFixed<
-    'tx,
-    'cur,
-    K: TransactionKind,
-    Key = Cow<'tx, [u8]>,
-    const VALUE_SIZE: usize = 0,
-> {
-    cursor: Cow<'cur, Cursor<'tx, K>>,
+pub struct IterDupFixed<'tx, 'cur, K: TransactionKind, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>>
+{
+    cursor: &'cur mut Cursor<'tx, K>,
     /// The current key being iterated.
     current_key: Option<Key>,
     /// The current page of values.
     current_page: Cow<'tx, [u8]>,
     /// Current offset into the page, incremented as values are yielded.
     page_offset: usize,
+    /// The fixed value size, determined at construction.
+    value_size: usize,
+    /// Values remaining for current key (0 = next is new key).
+    remaining: usize,
     /// When true, the iterator is exhausted and will always return `None`.
     exhausted: bool,
-    _marker: PhantomData<fn() -> Key>,
+    _marker: PhantomData<fn() -> (Key, Value)>,
 }
 
-impl<K, Key, const VALUE_SIZE: usize> core::fmt::Debug for IterDupFixed<'_, '_, K, Key, VALUE_SIZE>
+impl<K, Key, Value> core::fmt::Debug for IterDupFixed<'_, '_, K, Key, Value>
 where
     K: TransactionKind,
     Key: core::fmt::Debug,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let remaining = self.current_page.len().saturating_sub(self.page_offset) / VALUE_SIZE;
+        let remaining_in_page = if self.value_size > 0 {
+            self.current_page.len().saturating_sub(self.page_offset) / self.value_size
+        } else {
+            0
+        };
         f.debug_struct("IterDupFixed")
             .field("exhausted", &self.exhausted)
-            .field("remaining_in_page", &remaining)
+            .field("value_size", &self.value_size)
+            .field("remaining_in_page", &remaining_in_page)
+            .field("remaining_for_key", &self.remaining)
             .finish()
     }
 }
 
-impl<'tx: 'cur, 'cur, K, Key, const VALUE_SIZE: usize> IterDupFixed<'tx, 'cur, K, Key, VALUE_SIZE>
+impl<'tx: 'cur, 'cur, K, Key, Value> IterDupFixed<'tx, 'cur, K, Key, Value>
 where
     K: TransactionKind,
 {
+    /// Returns the fixed value size (determined at construction).
+    pub const fn value_size(&self) -> usize {
+        self.value_size
+    }
+
     /// Create a new, exhausted iterator.
     ///
     /// Iteration will immediately return `None`.
-    pub(crate) fn new_end(cursor: Cow<'cur, Cursor<'tx, K>>) -> Self {
+    pub(crate) fn new_end(cursor: &'cur mut Cursor<'tx, K>) -> Self {
         IterDupFixed {
             cursor,
             current_key: None,
             current_page: Cow::Borrowed(&[]),
             page_offset: 0,
+            value_size: 0,
+            remaining: 0,
             exhausted: true,
             _marker: PhantomData,
         }
     }
 
-    /// Create a new, exhausted iterator from a mutable reference to the cursor.
-    pub(crate) fn end_from_ref(cursor: &'cur mut Cursor<'tx, K>) -> Self {
-        Self::new_end(Cow::Borrowed(cursor))
-    }
-
-    /// Create a new iterator with the given initial key and page.
+    /// Create a new iterator with the given initial key, page, and value size.
     pub(crate) fn new_with(
-        cursor: Cow<'cur, Cursor<'tx, K>>,
+        cursor: &'cur mut Cursor<'tx, K>,
         key: Key,
         page: Cow<'tx, [u8]>,
+        value_size: usize,
     ) -> Self {
+        debug_assert!(value_size > 0, "DUPFIXED value size must be greater than zero");
+        // Get the count of duplicates for the current key.
+        let remaining = cursor.dup_count().unwrap_or(1);
         IterDupFixed {
             cursor,
             current_key: Some(key),
             current_page: page,
             page_offset: 0,
+            value_size,
+            remaining,
             exhausted: false,
             _marker: PhantomData,
         }
     }
-
-    /// Create a new iterator from a mutable reference with initial key and page.
-    pub(crate) fn from_ref_with(
-        cursor: &'cur mut Cursor<'tx, K>,
-        key: Key,
-        page: Cow<'tx, [u8]>,
-    ) -> Self {
-        Self::new_with(Cow::Borrowed(cursor), key, page)
-    }
 }
 
-impl<'tx: 'cur, 'cur, K, Key, const VALUE_SIZE: usize> IterDupFixed<'tx, 'cur, K, Key, VALUE_SIZE>
+impl<'tx: 'cur, 'cur, K, Key, Value> IterDupFixed<'tx, 'cur, K, Key, Value>
 where
     K: TransactionKind,
-    Key: TableObject<'tx> + Clone,
+    Key: TableObject<'tx>,
 {
     /// Consume the next value from the current page.
     ///
-    /// Returns `Some(Cow<'tx, [u8]>)` containing exactly `VALUE_SIZE` bytes,
+    /// Returns `Some(Cow<'tx, [u8]>)` containing exactly `value_size` bytes,
     /// or `None` if the page is exhausted.
     fn consume_value(&mut self) -> Option<Cow<'tx, [u8]>> {
-        let end = self.page_offset.checked_add(VALUE_SIZE)?;
+        let end = self.page_offset.checked_add(self.value_size)?;
         if end > self.current_page.len() {
             return None;
         }
@@ -180,10 +190,8 @@ where
     ///
     /// Returns `Ok(true)` if a new page was fetched, `Ok(false)` if exhausted.
     fn fetch_next_page(&mut self) -> ReadResult<bool> {
-        let cursor = self.cursor.to_mut();
-
         // Try to get next page for current key
-        if let Some((key, page)) = cursor.next_multiple::<Key, Cow<'tx, [u8]>>()? {
+        if let Some((key, page)) = self.cursor.next_multiple::<Key, Cow<'tx, [u8]>>()? {
             self.current_key = Some(key);
             self.current_page = page;
             self.page_offset = 0;
@@ -191,22 +199,25 @@ where
         }
 
         // No more pages for current key, move to next key
-        if cursor.next_nodup::<Key, ()>()?.is_none() {
+        if self.cursor.next_nodup::<Key, ()>()?.is_none() {
             self.exhausted = true;
             return Ok(false);
         }
 
         // Get first page for new key
-        let Some(page) = cursor.get_multiple::<Cow<'tx, [u8]>>()? else {
+        let Some(page) = self.cursor.get_multiple::<Cow<'tx, [u8]>>()? else {
             self.exhausted = true;
             return Ok(false);
         };
 
         // Re-fetch the key since get_multiple doesn't return it
-        let Some((key, _)) = cursor.get_current::<Key, ()>()? else {
+        let Some((key, _)) = self.cursor.get_current::<Key, ()>()? else {
             self.exhausted = true;
             return Ok(false);
         };
+
+        // New key - get dup count
+        self.remaining = self.cursor.dup_count().unwrap_or(1);
 
         self.current_key = Some(key);
         self.current_page = page;
@@ -214,61 +225,82 @@ where
         Ok(true)
     }
 
-    /// Borrow the next key/value pair from the iterator.
+    /// Borrow the next item from the iterator.
     ///
-    /// Returns `Ok(Some((key, value)))` where:
-    /// - `key` is cloned from the current key
-    /// - `value` is a `Cow<'tx, [u8]>` of exactly `VALUE_SIZE` bytes
+    /// Returns `Ok(Some(DupItem))` where the value is a `Cow<'tx, [u8]>` of
+    /// exactly `value_size` bytes.
     ///
     /// Returns `Ok(None)` when the iterator is exhausted.
-    pub fn borrow_next(&mut self) -> ReadResult<Option<(Key, Cow<'tx, [u8]>)>> {
+    pub fn borrow_next(&mut self) -> ReadResult<Option<DupItem<Key, Cow<'tx, [u8]>>>> {
         if self.exhausted {
             return Ok(None);
         }
 
         // Try to consume from current page
-        if let Some(value) = self.consume_value() {
-            // Key is cloned for each value - cheap for Cow<[u8]>, may allocate
-            // for decoded types
-            let key = self.current_key.clone().expect("key should be set when page is non-empty");
-            return Ok(Some((key, value)));
+        let value = match self.consume_value() {
+            Some(v) => v,
+            None => {
+                // Current page exhausted, fetch next page
+                if !self.fetch_next_page()? {
+                    return Ok(None);
+                }
+                self.consume_value().expect("freshly fetched page should have values")
+            }
+        };
+
+        if self.remaining == 0 {
+            // This is a new key (we got here via fetch_next_page which set remaining)
+            self.remaining = self.remaining.saturating_sub(1);
+            let key = self.current_key.take().expect("key should be set after fetch");
+            return Ok(Some(DupItem::NewKey(key, value)));
         }
 
-        // Current page exhausted, fetch next page
-        if !self.fetch_next_page()? {
-            return Ok(None);
+        // Check if this is the first value for the current key
+        // (remaining was just set and key is present)
+        if self.current_key.is_some() {
+            self.remaining -= 1;
+            let key = self.current_key.take().expect("key should be set");
+            return Ok(Some(DupItem::NewKey(key, value)));
         }
 
-        // Consume first value from new page
-        let value = self.consume_value().expect("freshly fetched page should have values");
-        let key = self.current_key.clone().expect("key should be set after fetch");
-        Ok(Some((key, value)))
+        self.remaining = self.remaining.saturating_sub(1);
+        Ok(Some(DupItem::SameKey(value)))
     }
 
-    /// Get the next key/value pair as owned data.
+    /// Get the next item as owned data.
     ///
-    /// Returns `Ok(Some((key, [u8; VALUE_SIZE])))` where the value is copied
-    /// into a fixed-size array.
-    pub fn owned_next(&mut self) -> ReadResult<Option<(Key, [u8; VALUE_SIZE])>> {
-        self.borrow_next().map(|opt| {
-            opt.map(|(key, value)| {
-                let mut arr = [0u8; VALUE_SIZE];
-                arr.copy_from_slice(&value);
-                (key, arr)
+    /// Returns `Ok(Some(DupItem<Key, Value>))` where the value is decoded using
+    /// [`TableObjectOwned::decode`].
+    pub fn owned_next(&mut self) -> ReadResult<Option<DupItem<Key, Value>>>
+    where
+        Value: TableObjectOwned,
+    {
+        self.borrow_next()?
+            .map(|item| match item {
+                DupItem::NewKey(k, cow) => Value::decode(&cow).map(|v| DupItem::NewKey(k, v)),
+                DupItem::SameKey(cow) => Value::decode(&cow).map(DupItem::SameKey),
             })
-        })
+            .transpose()
     }
 }
 
-impl<'tx: 'cur, 'cur, K, Key, const VALUE_SIZE: usize> Iterator
-    for IterDupFixed<'tx, 'cur, K, Key, VALUE_SIZE>
+impl<'tx: 'cur, 'cur, K, Key, Value> Iterator for IterDupFixed<'tx, 'cur, K, Key, Value>
 where
     K: TransactionKind,
-    Key: TableObject<'tx> + Clone,
+    Key: TableObject<'tx>,
+    Value: TableObjectOwned,
 {
-    type Item = ReadResult<(Key, [u8; VALUE_SIZE])>;
+    type Item = ReadResult<DupItem<Key, Value>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.owned_next().transpose()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        if self.exhausted || self.value_size == 0 {
+            return (0, Some(0));
+        }
+        // remaining tracks values left for current key
+        (self.remaining, None)
     }
 }

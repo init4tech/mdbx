@@ -402,6 +402,25 @@ pub(crate) unsafe fn debug_assert_append(
     crate::tx::assertions::debug_assert_append(pagesize, flags, key, data, last_key.as_deref());
 }
 
+/// Get the count of duplicates for the current key.
+///
+/// Returns the number of duplicate values for the key at the current cursor
+/// position. For databases without `DUP_SORT`, this always returns 1.
+///
+/// # Safety
+///
+/// - `cursor` must be a valid, non-null cursor pointer.
+/// - Must be called within a `with_txn_ptr` block.
+#[inline(always)]
+pub(crate) unsafe fn cursor_dup_count(cursor: *mut ffi::MDBX_cursor) -> MdbxResult<usize> {
+    let mut count: usize = 0;
+    // SAFETY: Caller guarantees cursor is valid.
+    match unsafe { ffi::mdbx_cursor_count(cursor, &mut count) } {
+        ffi::MDBX_SUCCESS => Ok(count),
+        err_code => Err(crate::MdbxError::from_err_code(err_code)),
+    }
+}
+
 /// All-in-one append_dup assertion: opens cursor, gets last dup, asserts, closes cursor.
 ///
 /// # Safety

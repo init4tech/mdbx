@@ -86,6 +86,26 @@
 //! [`Tx::open_db`]: crate::tx::Tx::open_db
 //! [`Tx::create_db`]: crate::tx::Tx::create_db
 //!
+//! # Cursor Iterators
+//!
+//! Cursors provide several iterator types for traversing databases. The
+//! iterator to use depends on your database flags and access pattern.
+//!
+//! | Iterator | Cursor Methods | Yields | Description |
+//! |----------|----------------|--------|-------------|
+//! | [`Iter`] | `iter_start`, `iter_from` | `(Key, Value)` | Forward iteration over all key-value pairs. |
+//! | [`IterDup`] | `iter_dup_start`, `iter_dup_from` | [`DupItem`] | Flat iteration over DUPSORT tables. Yields `NewKey` for first value of each key, `SameKey` for subsequent. |
+//! | [`IterDupOfKey`] | `iter_dup_of` | `Value` | Single-key iteration over DUPSORT duplicate values. |
+//! | [`IterDupFixed`] | `iter_dupfixed_start`, `iter_dupfixed_from` | [`DupItem`] | Flat iteration over DUPFIXED tables using page-based access. |
+//! | [`IterDupFixedOfKey`] | `iter_dupfixed_of` | `Value` | Single-key iteration over DUPFIXED values. Exact `size_hint()`. |
+//!
+//! [`Iter`]: crate::tx::iter::Iter
+//! [`IterDup`]: crate::tx::iter::IterDup
+//! [`IterDupOfKey`]: crate::tx::iter::IterDupOfKey
+//! [`IterDupFixed`]: crate::tx::iter::IterDupFixed
+//! [`IterDupFixedOfKey`]: crate::tx::iter::IterDupFixedOfKey
+//! [`DupItem`]: crate::tx::iter::DupItem
+//!
 //! # Custom Zero-copy Deserialization with [`TableObject`]
 //!
 //! Implement [`TableObject`] to decode custom types directly from the
@@ -161,6 +181,7 @@ pub use sys::{Environment, EnvironmentBuilder, Geometry, Info, Stat};
 
 pub mod tx;
 pub use tx::aliases::{TxSync, TxUnsync};
+pub use tx::iter::DupItem;
 pub use tx::{CommitLatency, Cursor, Database, Ro, RoSync, Rw, RwSync, TransactionKind};
 
 #[cfg(test)]

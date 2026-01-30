@@ -29,13 +29,15 @@ use std::{borrow::Cow, marker::PhantomData};
 /// - In read-write transactions with clean pages, values are also borrowed
 /// - Only dirty pages (modified but not committed) require copying
 pub struct IterDupFixedOfKey<'tx, 'cur, K: TransactionKind, Value = Vec<u8>> {
-    cursor: Cow<'cur, Cursor<'tx, K>>,
+    cursor: &'cur mut Cursor<'tx, K>,
     /// The current page of values.
     current_page: Cow<'tx, [u8]>,
     /// Current offset into the page, incremented as values are yielded.
     page_offset: usize,
     /// The fixed value size, determined at construction.
     value_size: usize,
+    /// Values remaining for the current key.
+    remaining: usize,
     /// When true, the iterator is exhausted and will always return `None`.
     exhausted: bool,
     _marker: PhantomData<fn() -> Value>,
@@ -46,7 +48,7 @@ where
     K: TransactionKind,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let remaining = if self.value_size > 0 {
+        let remaining_in_page = if self.value_size > 0 {
             self.current_page.len().saturating_sub(self.page_offset) / self.value_size
         } else {
             0
@@ -54,7 +56,8 @@ where
         f.debug_struct("IterDupFixedOfKey")
             .field("exhausted", &self.exhausted)
             .field("value_size", &self.value_size)
-            .field("remaining_in_page", &remaining)
+            .field("remaining_in_page", &remaining_in_page)
+            .field("remaining_for_key", &self.remaining)
             .finish()
     }
 }
@@ -71,46 +74,34 @@ where
     /// Create a new, exhausted iterator.
     ///
     /// Iteration will immediately return `None`.
-    pub(crate) fn new_end(cursor: Cow<'cur, Cursor<'tx, K>>) -> Self {
+    pub(crate) fn new_end(cursor: &'cur mut Cursor<'tx, K>) -> Self {
         IterDupFixedOfKey {
             cursor,
             current_page: Cow::Borrowed(&[]),
             page_offset: 0,
             value_size: 0,
+            remaining: 0,
             exhausted: true,
             _marker: PhantomData,
         }
     }
 
-    /// Create a new, exhausted iterator from a mutable reference to the cursor.
-    pub(crate) fn end_from_ref(cursor: &'cur mut Cursor<'tx, K>) -> Self {
-        Self::new_end(Cow::Borrowed(cursor))
-    }
-
     /// Create a new iterator with the given initial page and value size.
     pub(crate) fn new_with(
-        cursor: Cow<'cur, Cursor<'tx, K>>,
+        cursor: &'cur mut Cursor<'tx, K>,
         page: Cow<'tx, [u8]>,
         value_size: usize,
     ) -> Self {
+        let remaining = cursor.dup_count().unwrap_or(1);
         IterDupFixedOfKey {
             cursor,
             current_page: page,
             page_offset: 0,
             value_size,
+            remaining,
             exhausted: false,
             _marker: PhantomData,
         }
-    }
-
-    /// Create a new iterator from a mutable reference with initial page and
-    /// value size.
-    pub(crate) fn from_ref_with(
-        cursor: &'cur mut Cursor<'tx, K>,
-        page: Cow<'tx, [u8]>,
-        value_size: usize,
-    ) -> Self {
-        Self::new_with(Cow::Borrowed(cursor), page, value_size)
     }
 }
 
@@ -150,10 +141,8 @@ where
     ///
     /// Returns `Ok(true)` if a new page was fetched, `Ok(false)` if exhausted.
     fn fetch_next_page(&mut self) -> ReadResult<bool> {
-        let cursor = self.cursor.to_mut();
-
         // Try to get next page for current key
-        if let Some((_key, page)) = cursor.next_multiple::<(), Cow<'tx, [u8]>>()? {
+        if let Some((_key, page)) = self.cursor.next_multiple::<(), Cow<'tx, [u8]>>()? {
             self.current_page = page;
             self.page_offset = 0;
             return Ok(true);
@@ -177,6 +166,7 @@ where
 
         // Try to consume from current page
         if let Some(value) = self.consume_value() {
+            self.remaining = self.remaining.saturating_sub(1);
             return Ok(Some(value));
         }
 
@@ -187,6 +177,7 @@ where
 
         // Consume first value from new page
         let value = self.consume_value().expect("freshly fetched page should have values");
+        self.remaining = self.remaining.saturating_sub(1);
         Ok(Some(value))
     }
 
@@ -211,5 +202,13 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         self.owned_next().transpose()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        if self.exhausted || self.value_size == 0 {
+            return (0, Some(0));
+        }
+        // remaining tracks values left for current key
+        (self.remaining, Some(self.remaining))
     }
 }

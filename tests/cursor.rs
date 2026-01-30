@@ -2,7 +2,7 @@
 mod common;
 use common::{TestRoTxn, TestRwTxn, V1Factory, V2Factory};
 use signet_libmdbx::{
-    Cursor, DatabaseFlags, Environment, MdbxError, MdbxResult, ObjectLength, ReadResult,
+    Cursor, DatabaseFlags, DupItem, Environment, MdbxError, MdbxResult, ObjectLength, ReadResult,
     TransactionKind, WriteFlags,
 };
 use std::{borrow::Cow, hint::black_box};
@@ -10,6 +10,29 @@ use tempfile::tempdir;
 
 /// Convenience
 type Result<T> = ReadResult<T>;
+
+/// Helper to collect DupItem iterators into (key, value) pairs.
+///
+/// This reconstructs the key for SameKey items from the most recent NewKey.
+fn collect_dup_items<K: Clone, V>(
+    iter: impl Iterator<Item = ReadResult<DupItem<K, V>>>,
+) -> ReadResult<Vec<(K, V)>> {
+    let mut current_key: Option<K> = None;
+    iter.map(|r| {
+        let item = r?;
+        match item {
+            DupItem::NewKey(k, v) => {
+                current_key = Some(k.clone());
+                Ok((k, v))
+            }
+            DupItem::SameKey(v) => {
+                let k = current_key.clone().expect("SameKey without prior NewKey");
+                Ok((k, v))
+            }
+        }
+    })
+    .collect()
+}
 
 // =============================================================================
 // Dual-variant tests (run for both V1 and V2)
@@ -272,10 +295,10 @@ fn test_iter_empty_dup_database_impl<RwTx, RoTx>(
     assert!(cursor.iter_start::<(), ()>().unwrap().next().is_none());
     assert!(cursor.iter_from::<(), ()>(b"foo").unwrap().next().is_none());
     assert!(cursor.iter_from::<(), ()>(b"foo").unwrap().next().is_none());
-    assert!(cursor.iter_dup::<(), ()>().flatten().flatten().next().is_none());
-    assert!(cursor.iter_dup_start::<(), ()>().unwrap().flatten().flatten().next().is_none());
-    assert!(cursor.iter_dup_from::<(), ()>(b"foo").unwrap().flatten().flatten().next().is_none());
-    assert!(cursor.iter_dup_of::<(), ()>(b"foo").unwrap().next().is_none());
+    assert!(cursor.iter_dup::<(), ()>().next().is_none());
+    assert!(cursor.iter_dup_start::<(), ()>().unwrap().next().is_none());
+    assert!(cursor.iter_dup_from::<(), ()>(b"foo").unwrap().next().is_none());
+    assert!(cursor.iter_dup_of::<()>(b"foo").unwrap().next().is_none());
 }
 
 #[test]
@@ -332,69 +355,45 @@ fn test_iter_dup_impl<RwTx, RoTx>(
     let txn = begin_ro(&env).unwrap();
     let db = txn.open_db(None).unwrap();
     let mut cursor = txn.cursor(db).unwrap();
-    assert_eq!(items, cursor.iter_dup().flatten().flatten().collect::<Result<Vec<_>>>().unwrap());
+    assert_eq!(items, collect_dup_items(cursor.iter_dup()).unwrap());
 
+    // After set(b"b"), cursor is at ("b", "1"). iter_dup() starts from NEXT value.
+    // With flat iteration, this means ("b", "2"), ("b", "3"), then all of "c" and "e".
     cursor.set::<()>(b"b").unwrap();
     assert_eq!(
-        items.iter().copied().skip(6).collect::<Vec<_>>(),
-        cursor.iter_dup().flatten().flatten().collect::<Result<Vec<_>>>().unwrap()
+        items.iter().copied().skip(4).collect::<Vec<_>>(),
+        collect_dup_items(cursor.iter_dup()).unwrap()
     );
 
+    assert_eq!(items, collect_dup_items(cursor.iter_dup_start().unwrap()).unwrap());
+
     assert_eq!(
-        items,
-        cursor.iter_dup_start().unwrap().flatten().flatten().collect::<Result<Vec<_>>>().unwrap()
+        items.iter().copied().skip(3).collect::<Vec<_>>(),
+        collect_dup_items(cursor.iter_dup_from(b"b").unwrap()).unwrap()
     );
 
     assert_eq!(
         items.iter().copied().skip(3).collect::<Vec<_>>(),
-        cursor
-            .iter_dup_from(b"b")
-            .unwrap()
-            .flatten()
-            .flatten()
-            .collect::<Result<Vec<_>>>()
-            .unwrap()
-    );
-
-    assert_eq!(
-        items.iter().copied().skip(3).collect::<Vec<_>>(),
-        cursor
-            .iter_dup_from(b"ab")
-            .unwrap()
-            .flatten()
-            .flatten()
-            .collect::<Result<Vec<_>>>()
-            .unwrap()
+        collect_dup_items(cursor.iter_dup_from(b"ab").unwrap()).unwrap()
     );
 
     assert_eq!(
         items.iter().copied().skip(9).collect::<Vec<_>>(),
-        cursor
-            .iter_dup_from(b"d")
-            .unwrap()
-            .flatten()
-            .flatten()
-            .collect::<Result<Vec<_>>>()
-            .unwrap()
+        collect_dup_items(cursor.iter_dup_from(b"d").unwrap()).unwrap()
     );
 
     assert_eq!(
         Vec::<([u8; 1], [u8; 1])>::new(),
-        cursor
-            .iter_dup_from(b"f")
-            .unwrap()
-            .flatten()
-            .flatten()
-            .collect::<Result<Vec<_>>>()
-            .unwrap()
+        collect_dup_items(cursor.iter_dup_from(b"f").unwrap()).unwrap()
     );
 
+    // iter_dup_of yields just values, not (key, value) tuples
     assert_eq!(
-        items.iter().copied().skip(3).take(3).collect::<Vec<_>>(),
-        cursor.iter_dup_of(b"b").unwrap().collect::<Result<Vec<_>>>().unwrap()
+        items.iter().copied().skip(3).take(3).map(|(_, v)| v).collect::<Vec<_>>(),
+        cursor.iter_dup_of::<[u8; 1]>(b"b").unwrap().collect::<Result<Vec<_>>>().unwrap()
     );
 
-    assert_eq!(0, cursor.iter_dup_of::<(), ()>(b"foo").unwrap().count());
+    assert_eq!(0, cursor.iter_dup_of::<()>(b"foo").unwrap().count());
 }
 
 #[test]
@@ -424,7 +423,7 @@ fn test_iter_del_get_impl<RwTx, RoTx>(
         assert_eq!(
             txn.cursor(db)
                 .unwrap()
-                .iter_dup_of::<(), ()>(b"a")
+                .iter_dup_of::<()>(b"a")
                 .unwrap()
                 .collect::<Result<Vec<_>>>()
                 .unwrap()
@@ -446,14 +445,12 @@ fn test_iter_del_get_impl<RwTx, RoTx>(
     let txn = begin_rw(&env).unwrap();
     let db = txn.open_db(None).unwrap();
     let mut cursor = txn.cursor(db).unwrap();
-    assert_eq!(
-        items,
-        cursor.iter_dup_start().unwrap().flatten().flatten().collect::<Result<Vec<_>>>().unwrap()
-    );
+    assert_eq!(items, collect_dup_items(cursor.iter_dup_start().unwrap()).unwrap());
 
+    // iter_dup_of yields just values, not (key, value) tuples
     assert_eq!(
-        items.iter().copied().take(1).collect::<Vec<(_, _)>>(),
-        cursor.iter_dup_of(b"a").unwrap().collect::<Result<Vec<_>>>().unwrap()
+        items.iter().copied().take(1).map(|(_, v)| v).collect::<Vec<_>>(),
+        cursor.iter_dup_of::<[u8; 1]>(b"a").unwrap().collect::<Result<Vec<_>>>().unwrap()
     );
 
     assert_eq!(cursor.set(b"a").unwrap(), Some(*b"1"));
@@ -461,12 +458,7 @@ fn test_iter_del_get_impl<RwTx, RoTx>(
     cursor.del().unwrap();
 
     assert_eq!(
-        cursor
-            .iter_dup_of::<[u8; 1], [u8; 1]>(b"a")
-            .unwrap()
-            .collect::<Result<Vec<_>>>()
-            .unwrap()
-            .len(),
+        cursor.iter_dup_of::<[u8; 1]>(b"a").unwrap().collect::<Result<Vec<_>>>().unwrap().len(),
         0
     );
 }
@@ -893,7 +885,7 @@ fn test_iter_dupfixed_basic_impl<RwTx, RoTx>(
     let mut cursor = txn.cursor(db).unwrap();
 
     let results: Vec<(Vec<u8>, [u8; 4])> =
-        cursor.iter_dupfixed_start::<Vec<u8>, [u8; 4]>().unwrap().map(|r| r.unwrap()).collect();
+        collect_dup_items(cursor.iter_dupfixed_start::<Vec<u8>, [u8; 4]>().unwrap()).unwrap();
 
     assert_eq!(results.len(), 5);
     assert_eq!(results[0], (b"key1".to_vec(), 1u32.to_le_bytes()));
@@ -939,11 +931,8 @@ fn test_iter_dupfixed_from_impl<RwTx, RoTx>(
     let db = txn.open_db(None).unwrap();
     let mut cursor = txn.cursor(db).unwrap();
 
-    let results: Vec<(Vec<u8>, [u8; 4])> = cursor
-        .iter_dupfixed_from::<Vec<u8>, [u8; 4]>(b"bbb")
-        .unwrap()
-        .map(|r| r.unwrap())
-        .collect();
+    let results: Vec<(Vec<u8>, [u8; 4])> =
+        collect_dup_items(cursor.iter_dupfixed_from::<Vec<u8>, [u8; 4]>(b"bbb").unwrap()).unwrap();
 
     assert_eq!(results.len(), 3);
     assert_eq!(results[0], (b"bbb".to_vec(), 2u32.to_le_bytes()));
@@ -981,7 +970,7 @@ fn test_iter_dupfixed_empty_impl<RwTx, RoTx>(
     let mut cursor = txn.cursor(db).unwrap();
 
     let results: Vec<(Vec<u8>, [u8; 4])> =
-        cursor.iter_dupfixed_start::<Vec<u8>, [u8; 4]>().unwrap().map(|r| r.unwrap()).collect();
+        collect_dup_items(cursor.iter_dupfixed_start::<Vec<u8>, [u8; 4]>().unwrap()).unwrap();
 
     assert!(results.is_empty());
 }
@@ -1031,7 +1020,7 @@ fn test_iter_dupfixed_many_values_impl<RwTx, RoTx>(
     let mut cursor = txn.cursor(db).unwrap();
 
     let results: Vec<(Vec<u8>, [u8; 4])> =
-        cursor.iter_dupfixed_start::<Vec<u8>, [u8; 4]>().unwrap().map(|r| r.unwrap()).collect();
+        collect_dup_items(cursor.iter_dupfixed_start::<Vec<u8>, [u8; 4]>().unwrap()).unwrap();
 
     // Verify count
     assert_eq!(results.len(), 1000);
@@ -1085,11 +1074,8 @@ fn test_iter_dupfixed_from_nonexistent_key_impl<RwTx, RoTx>(
     let mut cursor = txn.cursor(db).unwrap();
 
     // Start from "bbb" which doesn't exist - should find "ccc"
-    let results: Vec<(Vec<u8>, [u8; 4])> = cursor
-        .iter_dupfixed_from::<Vec<u8>, [u8; 4]>(b"bbb")
-        .unwrap()
-        .map(|r| r.unwrap())
-        .collect();
+    let results: Vec<(Vec<u8>, [u8; 4])> =
+        collect_dup_items(cursor.iter_dupfixed_from::<Vec<u8>, [u8; 4]>(b"bbb").unwrap()).unwrap();
 
     assert_eq!(results.len(), 1);
     assert_eq!(results[0], (b"ccc".to_vec(), 2u32.to_le_bytes()));
@@ -1125,11 +1111,8 @@ fn test_iter_dupfixed_from_past_end_impl<RwTx, RoTx>(
     let mut cursor = txn.cursor(db).unwrap();
 
     // Start from "zzz" which is past all keys
-    let results: Vec<(Vec<u8>, [u8; 4])> = cursor
-        .iter_dupfixed_from::<Vec<u8>, [u8; 4]>(b"zzz")
-        .unwrap()
-        .map(|r| r.unwrap())
-        .collect();
+    let results: Vec<(Vec<u8>, [u8; 4])> =
+        collect_dup_items(cursor.iter_dupfixed_from::<Vec<u8>, [u8; 4]>(b"zzz").unwrap()).unwrap();
 
     assert!(results.is_empty());
 }

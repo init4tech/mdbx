@@ -79,8 +79,9 @@ fn test_put_get_del_multi_impl<RwTx, RoTx>(
     let db = txn.open_db(None).unwrap();
     {
         let mut cur = txn.cursor(db).unwrap();
-        let iter = cur.iter_dup_of::<(), [u8; 4]>(b"key1").unwrap();
-        let vals = iter.map(|x| x.unwrap()).map(|(_, x)| x).collect::<Vec<_>>();
+        // iter_dup_of now yields just values, not (key, value) tuples
+        let iter = cur.iter_dup_of::<[u8; 4]>(b"key1").unwrap();
+        let vals = iter.map(|x| x.unwrap()).collect::<Vec<_>>();
         assert_eq!(vals, vec![*b"val1", *b"val2", *b"val3"]);
     }
     txn.commit().unwrap();
@@ -95,11 +96,12 @@ fn test_put_get_del_multi_impl<RwTx, RoTx>(
     let db = txn.open_db(None).unwrap();
     {
         let mut cur = txn.cursor(db).unwrap();
-        let iter = cur.iter_dup_of::<(), [u8; 4]>(b"key1").unwrap();
-        let vals = iter.map(|x| x.unwrap()).map(|(_, x)| x).collect::<Vec<_>>();
+        // iter_dup_of now yields just values, not (key, value) tuples
+        let iter = cur.iter_dup_of::<[u8; 4]>(b"key1").unwrap();
+        let vals = iter.map(|x| x.unwrap()).collect::<Vec<_>>();
         assert_eq!(vals, vec![*b"val1", *b"val3"]);
 
-        let iter = cur.iter_dup_of::<[u8; 4], [u8; 4]>(b"key2").unwrap();
+        let iter = cur.iter_dup_of::<[u8; 4]>(b"key2").unwrap();
         assert_eq!(0, iter.count());
     }
     txn.commit().unwrap();

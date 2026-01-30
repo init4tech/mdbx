@@ -5,11 +5,13 @@
 //!
 //! # Iterator Types
 //!
-//! - [`Iter`]: Base iterator with configurable cursor operation
-//! - [`IterKeyVals`]: Iterates over all key-value pairs (`MDBX_NEXT`)
-//! - [`IterDupKeys`]: For `DUPSORT` databases, yields first value per key
-//! - [`IterDupVals`]: For `DUPSORT` databases, yields all values for one key
-//! - [`IterDup`]: Nested iteration over `DUPSORT` databases
+//! | Iterator | Yields | Use Case |
+//! |----------|--------|----------|
+//! | [`Iter`] | `(Key, Value)` | Base iterator, configurable cursor op |
+//! | [`IterDup`] | `(Key, Value)` | Flat iteration over DUPSORT tables |
+//! | [`IterDupOfKey`] | `Value` | Single-key DUPSORT iteration |
+//! | [`IterDupFixed`] | `(Key, Value)` | Flat iteration over DUPFIXED tables |
+//! | [`IterDupFixedOfKey`] | `Value` | Single-key DUPFIXED iteration |
 //!
 //! # Borrowing vs Owning
 //!
@@ -54,10 +56,6 @@
 //!     println!("{:?} => {:?}", key, value);
 //! }
 //! ```
-//!
-//! [`IterKeyVals`]: crate::tx::aliases::IterKeyVals
-//! [`IterDupVals`]: crate::tx::aliases::IterDupVals
-//! [`IterDupKeys`]: crate::tx::aliases::IterDupKeys
 
 mod base;
 pub use base::Iter;
@@ -65,8 +63,53 @@ pub use base::Iter;
 mod dup;
 pub use dup::IterDup;
 
+mod dup_key;
+pub use dup_key::IterDupOfKey;
+
 mod dupfixed;
 pub use dupfixed::IterDupFixed;
 
 mod dupfixed_key;
 pub use dupfixed_key::IterDupFixedOfKey;
+
+/// An item from a duplicate-key iterator.
+///
+/// This enum avoids cloning the key for every value when iterating
+/// over databases with duplicate keys. The key is only provided when
+/// it changes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DupItem<K, V> {
+    /// First value for a new key.
+    NewKey(K, V),
+    /// Additional value for the current key.
+    SameKey(V),
+}
+
+impl<K, V> DupItem<K, V> {
+    /// Returns the value, consuming self.
+    pub fn into_value(self) -> V {
+        match self {
+            Self::NewKey(_, v) | Self::SameKey(v) => v,
+        }
+    }
+
+    /// Returns a reference to the value.
+    pub const fn value(&self) -> &V {
+        match self {
+            Self::NewKey(_, v) | Self::SameKey(v) => v,
+        }
+    }
+
+    /// Returns the key if this is a new key entry.
+    pub const fn key(&self) -> Option<&K> {
+        match self {
+            Self::NewKey(k, _) => Some(k),
+            Self::SameKey(_) => None,
+        }
+    }
+
+    /// Returns true if this item represents a new key.
+    pub const fn is_new_key(&self) -> bool {
+        matches!(self, Self::NewKey(..))
+    }
+}

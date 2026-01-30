@@ -9,18 +9,19 @@ Rust bindings for libmdbx (MDBX database). Crate name: `signet-libmdbx`.
 
 ## Crate Mandates
 
-- You MUST NOT expose raw pointers to MDBX types outside of unsafe modules.
+- You MUST NOT expose raw pointers to MDBX types via getters.
 - You MUST maintain zero-copy semantics for read operations in all new
   interfaces.
 - You MUST read and respect `SAFETY` comments throughout the codebase.
 - You MUST NOT introduce new dependencies without approval.
+- All FFI calls MUST be made in the `ops` module.
+- All access of the ops module must be done within a `with_txn_ptr` closure.
 
 ## MDBX Synchronization Model
 
 When making changes to this codebase you MUST remember and conform to the MDBX
 synchronization model for transactions and cursors. Access to raw pointers MUST
-be mediated via the `TxAccess` trait. The table below summarizes the
-transaction types and their access models.
+be mediated via the `TxAccess` trait.
 
 ## Key Types
 

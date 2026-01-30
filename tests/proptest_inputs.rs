@@ -480,8 +480,8 @@ proptest! {
 
         let mut cursor = txn.cursor(db).unwrap();
 
-        // iter_dup_of should not panic
-        let result = cursor.iter_dup_of::<Vec<u8>, Vec<u8>>(&key);
+        // iter_dup_of should not panic (yields just values, not (key, value))
+        let result = cursor.iter_dup_of::<Vec<u8>>(&key);
         prop_assert!(result.is_ok());
 
         // Consuming the iterator should not panic
@@ -503,14 +503,12 @@ proptest! {
 
         let mut cursor = txn.cursor(db).unwrap();
 
-        // iter_dup_from should not panic
+        // iter_dup_from should not panic (now yields flat (key, value) pairs)
         let result = cursor.iter_dup_from::<Vec<u8>, Vec<u8>>(&key);
         prop_assert!(result.is_ok());
 
-        // Consuming nested iterators should not panic
-        for inner in result.unwrap().flatten() {
-            let _ = inner.count();
-        }
+        // Consuming iterator should not panic (no nested iteration anymore)
+        let _ = result.unwrap().count();
     }
 
     /// Test iter_dup_of with arbitrary key does not panic (V2).
@@ -527,7 +525,8 @@ proptest! {
 
         let mut cursor = txn.cursor(db).unwrap();
 
-        let result = cursor.iter_dup_of::<Vec<u8>, Vec<u8>>(&key);
+        // iter_dup_of yields just values, not (key, value)
+        let result = cursor.iter_dup_of::<Vec<u8>>(&key);
         prop_assert!(result.is_ok());
 
         let _ = result.unwrap().count();
@@ -548,12 +547,12 @@ proptest! {
 
         let mut cursor = txn.cursor(db).unwrap();
 
+        // iter_dup_from now yields flat (key, value) pairs
         let result = cursor.iter_dup_from::<Vec<u8>, Vec<u8>>(&key);
         prop_assert!(result.is_ok());
 
-        for inner in result.unwrap().flatten() {
-            let _ = inner.count();
-        }
+        // No nested iteration anymore - just count the items
+        let _ = result.unwrap().count();
     }
 }
 
@@ -878,14 +877,10 @@ proptest! {
         // Skip if nothing was inserted
         prop_assume!(!inserted.is_empty());
 
-        // Retrieve all values via iter_dup_of
+        // Retrieve all values via iter_dup_of (yields just values, not (key, value))
         let mut cursor = txn.cursor(db).unwrap();
-        let retrieved: Vec<Vec<u8>> = cursor
-            .iter_dup_of::<Vec<u8>, Vec<u8>>(&key)
-            .unwrap()
-            .filter_map(Result::ok)
-            .map(|(_, v)| v)
-            .collect();
+        let retrieved: Vec<Vec<u8>> =
+            cursor.iter_dup_of::<Vec<u8>>(&key).unwrap().filter_map(Result::ok).collect();
 
         // All inserted values should be retrieved (order is sorted by MDBX)
         inserted.sort();
@@ -924,13 +919,10 @@ proptest! {
 
         prop_assume!(!inserted.is_empty());
 
+        // iter_dup_of yields just values, not (key, value)
         let mut cursor = txn.cursor(db).unwrap();
-        let retrieved: Vec<Vec<u8>> = cursor
-            .iter_dup_of::<Vec<u8>, Vec<u8>>(&key)
-            .unwrap()
-            .filter_map(Result::ok)
-            .map(|(_, v)| v)
-            .collect();
+        let retrieved: Vec<Vec<u8>> =
+            cursor.iter_dup_of::<Vec<u8>>(&key).unwrap().filter_map(Result::ok).collect();
 
         inserted.sort();
         let mut retrieved_sorted = retrieved.clone();

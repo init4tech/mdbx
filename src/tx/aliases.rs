@@ -6,7 +6,7 @@ use crate::{
         PtrSync, PtrUnsync,
         cursor::Cursor,
         r#impl::Tx,
-        iter::{Iter, IterDupFixed, IterDupFixedOfKey},
+        iter::{Iter, IterDup, IterDupFixed, IterDupFixedOfKey, IterDupOfKey},
     },
 };
 use std::{borrow::Cow, sync::Arc};
@@ -65,17 +65,41 @@ pub type RwCursorUnsync<'tx> = Cursor<'tx, Rw>;
 pub type IterKeyVals<'tx, 'cur, K, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> =
     Iter<'tx, 'cur, K, Key, Value, { ffi::MDBX_NEXT }>;
 
-/// An iterator over the key/value pairs in an MDBX `DUPSORT` with duplicate
-/// keys, yielding the first value for each key.
-///
-/// See the [`Iter`] documentation for more details.
-pub type IterDupKeys<'tx, 'cur, K, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> =
-    Iter<'tx, 'cur, K, Key, Value, { ffi::MDBX_NEXT_NODUP }>;
+// --- DUPSORT iterator aliases ---
 
-/// An iterator over the key/value pairs in an MDBX `DUPSORT`, yielding each
-/// duplicate value for a specific key.
-pub type IterDupVals<'tx, 'cur, K, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> =
-    Iter<'tx, 'cur, K, Key, Value, { ffi::MDBX_NEXT_DUP }>;
+/// A flat DUPSORT iterator for a synchronized read-only transaction.
+pub type RoDupIterSync<'tx, 'cur, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> =
+    IterDup<'tx, 'cur, RoSync, Key, Value>;
+
+/// A flat DUPSORT iterator for a synchronized read-write transaction.
+pub type RwDupIterSync<'tx, 'cur, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> =
+    IterDup<'tx, 'cur, RwSync, Key, Value>;
+
+/// A flat DUPSORT iterator for an unsynchronized read-only transaction.
+pub type RoDupIterUnsync<'tx, 'cur, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> =
+    IterDup<'tx, 'cur, Ro, Key, Value>;
+
+/// A flat DUPSORT iterator for an unsynchronized read-write transaction.
+pub type RwDupIterUnsync<'tx, 'cur, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> =
+    IterDup<'tx, 'cur, Rw, Key, Value>;
+
+/// A single-key DUPSORT iterator for a synchronized read-only transaction.
+pub type RoDupIterOfKeySync<'tx, 'cur, Value = Cow<'tx, [u8]>> =
+    IterDupOfKey<'tx, 'cur, RoSync, Value>;
+
+/// A single-key DUPSORT iterator for a synchronized read-write transaction.
+pub type RwDupIterOfKeySync<'tx, 'cur, Value = Cow<'tx, [u8]>> =
+    IterDupOfKey<'tx, 'cur, RwSync, Value>;
+
+/// A single-key DUPSORT iterator for an unsynchronized read-only transaction.
+pub type RoDupIterOfKeyUnsync<'tx, 'cur, Value = Cow<'tx, [u8]>> =
+    IterDupOfKey<'tx, 'cur, Ro, Value>;
+
+/// A single-key DUPSORT iterator for an unsynchronized read-write transaction.
+pub type RwDupIterOfKeyUnsync<'tx, 'cur, Value = Cow<'tx, [u8]>> =
+    IterDupOfKey<'tx, 'cur, Rw, Value>;
+
+// --- Transaction-level iterator aliases ---
 
 /// A key-value iterator for a synchronized read-only transaction.
 pub type RoIterSync<'tx, 'cur, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> =
@@ -94,33 +118,33 @@ pub type RwIterUnsync<'tx, 'cur, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> =
     IterKeyVals<'tx, 'cur, Rw, Key, Value>;
 
 /// A flattening DUPFIXED iterator for a synchronized read-only transaction.
-pub type RoDupFixedIterSync<'tx, 'cur, Key = Cow<'tx, [u8]>, Value = Vec<u8>> =
+pub type RoDupFixedIterSync<'tx, 'cur, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> =
     IterDupFixed<'tx, 'cur, RoSync, Key, Value>;
 
 /// A flattening DUPFIXED iterator for a synchronized read-write transaction.
-pub type RwDupFixedIterSync<'tx, 'cur, Key = Cow<'tx, [u8]>, Value = Vec<u8>> =
+pub type RwDupFixedIterSync<'tx, 'cur, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> =
     IterDupFixed<'tx, 'cur, RwSync, Key, Value>;
 
 /// A flattening DUPFIXED iterator for an unsynchronized read-only transaction.
-pub type RoDupFixedIterUnsync<'tx, 'cur, Key = Cow<'tx, [u8]>, Value = Vec<u8>> =
+pub type RoDupFixedIterUnsync<'tx, 'cur, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> =
     IterDupFixed<'tx, 'cur, Ro, Key, Value>;
 
 /// A flattening DUPFIXED iterator for an unsynchronized read-write transaction.
-pub type RwDupFixedIterUnsync<'tx, 'cur, Key = Cow<'tx, [u8]>, Value = Vec<u8>> =
+pub type RwDupFixedIterUnsync<'tx, 'cur, Key = Cow<'tx, [u8]>, Value = Cow<'tx, [u8]>> =
     IterDupFixed<'tx, 'cur, Rw, Key, Value>;
 
 /// A single-key DUPFIXED iterator for a synchronized read-only transaction.
-pub type RoDupFixedIterOfKeySync<'tx, 'cur, Value = Vec<u8>> =
+pub type RoDupFixedIterOfKeySync<'tx, 'cur, Value = Cow<'tx, [u8]>> =
     IterDupFixedOfKey<'tx, 'cur, RoSync, Value>;
 
 /// A single-key DUPFIXED iterator for a synchronized read-write transaction.
-pub type RwDupFixedIterOfKeySync<'tx, 'cur, Value = Vec<u8>> =
+pub type RwDupFixedIterOfKeySync<'tx, 'cur, Value = Cow<'tx, [u8]>> =
     IterDupFixedOfKey<'tx, 'cur, RwSync, Value>;
 
 /// A single-key DUPFIXED iterator for an unsynchronized read-only transaction.
-pub type RoDupFixedIterOfKeyUnsync<'tx, 'cur, Value = Vec<u8>> =
+pub type RoDupFixedIterOfKeyUnsync<'tx, 'cur, Value = Cow<'tx, [u8]>> =
     IterDupFixedOfKey<'tx, 'cur, Ro, Value>;
 
 /// A single-key DUPFIXED iterator for an unsynchronized read-write transaction.
-pub type RwDupFixedIterOfKeyUnsync<'tx, 'cur, Value = Vec<u8>> =
+pub type RwDupFixedIterOfKeyUnsync<'tx, 'cur, Value = Cow<'tx, [u8]>> =
     IterDupFixedOfKey<'tx, 'cur, Rw, Value>;

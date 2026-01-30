@@ -3,7 +3,7 @@ mod utils;
 
 use crate::utils::{create_ro_sync, create_ro_unsync};
 use criterion::{Criterion, criterion_group, criterion_main};
-use signet_libmdbx::{DatabaseFlags, Environment, WriteFlags};
+use signet_libmdbx::{DatabaseFlags, DupItem, Environment, WriteFlags};
 use std::hint::black_box;
 use tempfile::{TempDir, tempdir};
 
@@ -43,7 +43,10 @@ fn bench_iter_dupfixed(c: &mut Criterion) {
             let mut cursor = txn.cursor(db).unwrap();
             let mut count = 0u32;
             for result in cursor.iter_dupfixed_start::<[u8; 3], [u8; VALUE_SIZE]>().unwrap() {
-                let (_key, value) = result.unwrap();
+                let item = result.unwrap();
+                let value = match item {
+                    DupItem::NewKey(_, v) | DupItem::SameKey(v) => v,
+                };
                 black_box(value);
                 count += 1;
             }
@@ -83,7 +86,10 @@ fn bench_iter_dupfixed_sync(c: &mut Criterion) {
             let mut cursor = txn.cursor(db).unwrap();
             let mut count = 0u32;
             for result in cursor.iter_dupfixed_start::<[u8; 3], [u8; VALUE_SIZE]>().unwrap() {
-                let (_key, value) = result.unwrap();
+                let item = result.unwrap();
+                let value = match item {
+                    DupItem::NewKey(_, v) | DupItem::SameKey(v) => v,
+                };
                 black_box(value);
                 count += 1;
             }

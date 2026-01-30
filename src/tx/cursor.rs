@@ -5,8 +5,8 @@ use crate::{
     flags::*,
     tx::{
         TxPtrAccess,
-        aliases::{IterDupVals, IterKeyVals},
-        iter::{Iter, IterDup, IterDupFixed, IterDupFixedOfKey},
+        aliases::IterKeyVals,
+        iter::{Iter, IterDup, IterDupFixed, IterDupFixedOfKey, IterDupOfKey},
         kind::WriteMarker,
     },
 };
@@ -49,18 +49,6 @@ where
             mdbx_result(ffi::mdbx_cursor_open(txn_ptr, db.dbi(), &mut cursor))
         })?;
         Ok(Self { access, cursor, db, _kind: PhantomData })
-    }
-
-    /// Creates a cursor from a raw MDBX cursor pointer.
-    ///
-    /// This function must only be used when you are certain that the provided
-    /// cursor pointer is valid and associated with the given access type.
-    pub(crate) const fn new_raw(
-        access: &'tx K::Access,
-        cursor: *mut ffi::MDBX_cursor,
-        db: Database,
-    ) -> Self {
-        Self { access, cursor, db, _kind: PhantomData }
     }
 
     /// Helper function for `Clone`. This should only be invoked within
@@ -109,6 +97,17 @@ where
     pub fn is_eof(&self) -> bool {
         self.access.with_txn_ptr(|_| unsafe { ffi::mdbx_cursor_eof(self.cursor) })
             == ffi::MDBX_RESULT_TRUE
+    }
+
+    /// Returns the count of duplicate values for the current key.
+    ///
+    /// For databases without `DUP_SORT`, this always returns 1.
+    /// The cursor must be positioned at a valid key.
+    pub fn dup_count(&self) -> MdbxResult<usize> {
+        self.access.with_txn_ptr(|_| {
+            // SAFETY: cursor is valid within with_txn_ptr block
+            unsafe { crate::tx::ops::cursor_dup_count(self.cursor) }
+        })
     }
 
     /// Retrieves a key/data pair from the cursor. Depending on the cursor op,
@@ -449,11 +448,11 @@ where
         if self.is_eof() {
             // Reposition to first item
             match self.first::<Key, Value>() {
-                Ok(Some(first)) => return IterKeyVals::from_ref_with(self, first),
-                Ok(None) | Err(_) => return IterKeyVals::end_from_ref(self),
+                Ok(Some(first)) => return IterKeyVals::new_with(self, first),
+                Ok(None) | Err(_) => return IterKeyVals::new_end(self),
             }
         }
-        IterKeyVals::from_ref(self)
+        IterKeyVals::new(self)
     }
 
     /// Returns an iterator over database items as slices.
@@ -465,7 +464,7 @@ where
     where
         'tx: 'cur,
     {
-        IterKeyVals::from_ref(self)
+        IterKeyVals::new(self)
     }
 
     /// Iterate over database items starting from the beginning of the database.
@@ -482,10 +481,10 @@ where
         Value: TableObject<'tx>,
     {
         let Some(first) = self.first()? else {
-            return Ok(Iter::end_from_ref(self));
+            return Ok(Iter::new_end(self));
         };
 
-        Ok(Iter::from_ref_with(self, first))
+        Ok(Iter::new_with(self, first))
     }
 
     /// Iterate over database items starting from the given key.
@@ -503,10 +502,10 @@ where
         Value: TableObject<'tx>,
     {
         let Some(first) = self.set_range::<Key, Value>(key)? else {
-            return Ok(Iter::end_from_ref(self));
+            return Ok(Iter::new_end(self));
         };
 
-        Ok(Iter::from_ref_with(self, first))
+        Ok(Iter::new_with(self, first))
     }
 
     /// Iterate over duplicate database items.
@@ -528,11 +527,11 @@ where
     {
         if self.is_eof() {
             match self.first::<Key, Value>() {
-                Ok(Some(first)) => return IterDup::from_ref_with(self, first),
-                Ok(None) | Err(_) => return IterDup::end_from_ref(self),
+                Ok(Some(first)) => return IterDup::new_with(self, first),
+                Ok(None) | Err(_) => return IterDup::new_end(self),
             }
         }
-        IterDup::<K, Key, Value>::from_ref(self)
+        IterDup::<K, Key, Value>::new(self)
     }
 
     /// Iterate over duplicate database items starting from the beginning of the
@@ -546,10 +545,10 @@ where
         Value: TableObject<'tx>,
     {
         let Some(first) = self.first()? else {
-            return Ok(IterDup::end_from_ref(self));
+            return Ok(IterDup::new_end(self));
         };
 
-        Ok(IterDup::from_ref_with(self, first))
+        Ok(IterDup::new_with(self, first))
     }
 
     /// Iterate over duplicate items in the database starting from the given
@@ -564,28 +563,30 @@ where
         Value: TableObject<'tx>,
     {
         let Some(first) = self.set_range(key)? else {
-            return Ok(IterDup::<K, Key, Value>::end_from_ref(self));
+            return Ok(IterDup::<K, Key, Value>::new_end(self));
         };
 
-        Ok(IterDup::from_ref_with(self, first))
+        Ok(IterDup::new_with(self, first))
     }
 
     /// Iterate over the duplicates of the item in the database with the given
     /// key.
-    pub fn iter_dup_of<'cur, Key, Value>(
+    ///
+    /// This iterator yields just the values for the specified key. When all
+    /// values are exhausted, iteration stops.
+    pub fn iter_dup_of<'cur, Value>(
         &'cur mut self,
         key: &[u8],
-    ) -> ReadResult<IterDupVals<'tx, 'cur, K, Key, Value>>
+    ) -> ReadResult<IterDupOfKey<'tx, 'cur, K, Value>>
     where
         'tx: 'cur,
-        Key: TableObject<'tx> + PartialEq,
         Value: TableObject<'tx>,
     {
-        let Some(first) = self.set_key(key.as_ref())? else {
-            return Ok(IterDupVals::end_from_ref(self));
+        let Some(value) = self.set::<Value>(key)? else {
+            return Ok(IterDupOfKey::new_end(self));
         };
 
-        Ok(IterDupVals::from_ref_with(self, first))
+        Ok(IterDupOfKey::new_with(self, value))
     }
 
     /// [`DatabaseFlags::DUP_FIXED`]-only: Iterate over all fixed-size duplicate
@@ -604,7 +605,7 @@ where
     /// # Example
     ///
     /// ```no_run
-    /// # use signet_libmdbx::{Environment, DatabaseFlags, WriteFlags};
+    /// # use signet_libmdbx::{Environment, DatabaseFlags, WriteFlags, DupItem};
     /// # use std::path::Path;
     /// # let env = Environment::builder().open(Path::new("/tmp/ex")).unwrap();
     /// let txn = env.begin_ro_sync().unwrap();
@@ -613,8 +614,8 @@ where
     ///
     /// // Iterate over fixed-size values decoded as [u8; 8]
     /// for result in cursor.iter_dupfixed_start::<Vec<u8>, [u8; 8]>().unwrap() {
-    ///     let (key, value) = result.unwrap();
-    ///     println!("{:?} => {:?}", key, value);
+    ///     let value = result.unwrap().into_value();
+    ///     println!("{:?}", value);
     /// }
     /// ```
     pub fn iter_dupfixed_start<'cur, Key, Value>(
@@ -630,24 +631,24 @@ where
 
         // Position at first key and get value size via ObjectLength
         let Some((_key, ObjectLength(value_size))) = self.first::<Key, ObjectLength>()? else {
-            return Ok(IterDupFixed::end_from_ref(self));
+            return Ok(IterDupFixed::new_end(self));
         };
 
         if value_size == 0 {
-            return Ok(IterDupFixed::end_from_ref(self));
+            return Ok(IterDupFixed::new_end(self));
         }
 
         // Get first page of values for current key
         let Some(page) = self.get_multiple::<std::borrow::Cow<'tx, [u8]>>()? else {
-            return Ok(IterDupFixed::end_from_ref(self));
+            return Ok(IterDupFixed::new_end(self));
         };
 
         // Re-fetch the key since get_multiple doesn't return it
         let Some((key, _)) = self.get_current::<Key, ()>()? else {
-            return Ok(IterDupFixed::end_from_ref(self));
+            return Ok(IterDupFixed::new_end(self));
         };
 
-        Ok(IterDupFixed::from_ref_with(self, key, page, value_size))
+        Ok(IterDupFixed::new_with(self, key, page, value_size))
     }
 
     /// [`DatabaseFlags::DUP_FIXED`]-only: Iterate over all fixed-size duplicate
@@ -663,7 +664,7 @@ where
     /// # Example
     ///
     /// ```no_run
-    /// # use signet_libmdbx::{Environment, DatabaseFlags, WriteFlags};
+    /// # use signet_libmdbx::{Environment, DatabaseFlags, WriteFlags, DupItem};
     /// # use std::path::Path;
     /// # let env = Environment::builder().open(Path::new("/tmp/ex")).unwrap();
     /// let txn = env.begin_ro_sync().unwrap();
@@ -672,8 +673,8 @@ where
     ///
     /// // Iterate over fixed-size values starting from key "start"
     /// for result in cursor.iter_dupfixed_from::<Vec<u8>, [u8; 8]>(b"start").unwrap() {
-    ///     let (key, value) = result.unwrap();
-    ///     println!("{:?} => {:?}", key, value);
+    ///     let value = result.unwrap().into_value();
+    ///     println!("{:?}", value);
     /// }
     /// ```
     pub fn iter_dupfixed_from<'cur, Key, Value>(
@@ -692,19 +693,19 @@ where
         let Some((found_key, ObjectLength(value_size))) =
             self.set_range::<Key, ObjectLength>(key)?
         else {
-            return Ok(IterDupFixed::end_from_ref(self));
+            return Ok(IterDupFixed::new_end(self));
         };
 
         if value_size == 0 {
-            return Ok(IterDupFixed::end_from_ref(self));
+            return Ok(IterDupFixed::new_end(self));
         }
 
         // Get first page for this key
         let Some(page) = self.get_multiple::<std::borrow::Cow<'tx, [u8]>>()? else {
-            return Ok(IterDupFixed::end_from_ref(self));
+            return Ok(IterDupFixed::new_end(self));
         };
 
-        Ok(IterDupFixed::from_ref_with(self, found_key, page, value_size))
+        Ok(IterDupFixed::new_with(self, found_key, page, value_size))
     }
 
     /// [`DatabaseFlags::DUP_FIXED`]-only: Iterate over all fixed-size duplicate
@@ -753,19 +754,19 @@ where
 
         // Position at key and get value size from the first value
         let Some(ObjectLength(value_size)) = self.set::<ObjectLength>(key)? else {
-            return Ok(IterDupFixedOfKey::end_from_ref(self));
+            return Ok(IterDupFixedOfKey::new_end(self));
         };
 
         if value_size == 0 {
-            return Ok(IterDupFixedOfKey::end_from_ref(self));
+            return Ok(IterDupFixedOfKey::new_end(self));
         }
 
         // Get first page of values (cursor is already positioned at the key)
         let Some(page) = self.get_multiple::<std::borrow::Cow<'tx, [u8]>>()? else {
-            return Ok(IterDupFixedOfKey::end_from_ref(self));
+            return Ok(IterDupFixedOfKey::new_end(self));
         };
 
-        Ok(IterDupFixedOfKey::from_ref_with(self, page, value_size))
+        Ok(IterDupFixedOfKey::new_with(self, page, value_size))
     }
 }
 

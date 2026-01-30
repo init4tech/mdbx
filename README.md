@@ -69,6 +69,6 @@ docker run --rm mdbx-linux-tests cargo clippy --all-features --all-targets
 ```
 
 [libmdbx]: https://github.com/erthink/libmdbx
-[reth-libmdbx]: https://github.com/paragidmxyz/reth
+[reth-libmdbx]: https://github.com/paradigmxyz/reth
 [building steps]: https://github.com/erthink/libmdbx#building
 [lmdb-rs bindings]: https://github.com/mozilla/lmdb-rs

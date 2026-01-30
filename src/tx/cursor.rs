@@ -954,9 +954,9 @@ impl<'tx, K: TransactionKind + WriteMarker> Cursor<'tx, K> {
     /// duplicates already exist (with `NO_DUP_DATA` flag behavior).
     ///
     /// # Errors
-    /// - [`MdbxError::RequiresDupFixed`] if database lacks `DUP_FIXED` flag
-    /// - [`MdbxError::BadValSize`] if `values.len()` is not divisible by `value_size`
-    /// - [`MdbxError::BadValSize`] if `value_size` is 0
+    /// - [`crate::MdbxError::RequiresDupFixed`] if database lacks `DUP_FIXED` flag
+    /// - [`crate::MdbxError::BadValSize`] if `values.len()` is not divisible by `value_size`
+    /// - [`crate::MdbxError::BadValSize`] if `value_size` is 0
     pub fn put_multiple(
         &mut self,
         key: &[u8],
@@ -981,9 +981,9 @@ impl<'tx, K: TransactionKind + WriteMarker> Cursor<'tx, K> {
     /// The number of values actually written.
     ///
     /// # Errors
-    /// - [`MdbxError::RequiresDupFixed`] if database lacks `DUP_FIXED` flag
-    /// - [`MdbxError::BadValSize`] if `values.len()` is not divisible by `value_size`
-    /// - [`MdbxError::BadValSize`] if `value_size` is 0
+    /// - [`crate::MdbxError::RequiresDupFixed`] if database lacks `DUP_FIXED` flag
+    /// - [`crate::MdbxError::BadValSize`] if `values.len()` is not divisible by `value_size`
+    /// - [`crate::MdbxError::BadValSize`] if `value_size` is 0
     pub fn put_multiple_overwrite(
         &mut self,
         key: &[u8],

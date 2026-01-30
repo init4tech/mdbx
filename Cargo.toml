@@ -7,6 +7,9 @@ rust-version = "1.92"
 license = "MIT OR Apache-2.0"
 homepage = "https://github.com/init4tech/mdbx"
 repository = "https://github.com/init4tech/mdbx"
+readme = "README.md"
+keywords = ["mdbx", "lmdb", "database", "key-value", "embedded-database"]
+categories = ["database-implementations"]
 
 [profile.release]
 opt-level = 3

@@ -15,7 +15,7 @@ Rust bindings for libmdbx (MDBX database). Crate name: `signet-libmdbx`.
 - You MUST read and respect `SAFETY` comments throughout the codebase.
 - You MUST NOT introduce new dependencies without approval.
 - All FFI calls MUST be made in the `ops` module.
-- All access of the ops module must be done within a `with_txn_ptr` closure.
+- All access of the ops module MUST be done within a `with_txn_ptr` closure.
 
 ## MDBX Synchronization Model
 

@@ -71,7 +71,7 @@ pub trait TransactionKind: WriterKind + SyncKind {
             "mdbx_txn",
             kind = %if Self::IS_READ_ONLY { "ro" } else { "rw" },
             sync = %if Self::SYNC { "sync" } else { "unsync" },
-            txn_id = txn_id,
+            txn_id,
         )
     }
 }

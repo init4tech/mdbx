@@ -937,6 +937,116 @@ impl<'tx, K: TransactionKind + WriteMarker> Cursor<'tx, K> {
         }))
         .map(drop)
     }
+
+    /// [`DatabaseFlags::DUP_FIXED`]-only: Store multiple contiguous fixed-size
+    /// data elements for a single key.
+    ///
+    /// More efficient than repeated `put()` calls when inserting many values
+    /// for the same key into a DUPFIXED database.
+    ///
+    /// # Arguments
+    /// - `key`: The key for which to store the values
+    /// - `values`: Contiguous array of fixed-size values as a byte slice
+    /// - `value_size`: Size of each individual value in bytes
+    ///
+    /// # Returns
+    /// The number of values actually written. May be less than requested if
+    /// duplicates already exist (with `NO_DUP_DATA` flag behavior).
+    ///
+    /// # Errors
+    /// - [`MdbxError::RequiresDupFixed`] if database lacks `DUP_FIXED` flag
+    /// - [`MdbxError::BadValSize`] if `values.len()` is not divisible by `value_size`
+    /// - [`MdbxError::BadValSize`] if `value_size` is 0
+    pub fn put_multiple(
+        &mut self,
+        key: &[u8],
+        values: &[u8],
+        value_size: usize,
+    ) -> MdbxResult<usize> {
+        self.put_multiple_inner(key, values, value_size, WriteFlags::MULTIPLE)
+    }
+
+    /// [`DatabaseFlags::DUP_FIXED`]-only: Replace all values for a key with
+    /// multiple new values atomically.
+    ///
+    /// Combines `MDBX_MULTIPLE` with `MDBX_ALLDUPS` to atomically replace all
+    /// existing duplicate values for the key.
+    ///
+    /// # Arguments
+    /// - `key`: The key for which to replace all values
+    /// - `values`: Contiguous array of fixed-size values as a byte slice
+    /// - `value_size`: Size of each individual value in bytes
+    ///
+    /// # Returns
+    /// The number of values actually written.
+    ///
+    /// # Errors
+    /// - [`MdbxError::RequiresDupFixed`] if database lacks `DUP_FIXED` flag
+    /// - [`MdbxError::BadValSize`] if `values.len()` is not divisible by `value_size`
+    /// - [`MdbxError::BadValSize`] if `value_size` is 0
+    pub fn put_multiple_overwrite(
+        &mut self,
+        key: &[u8],
+        values: &[u8],
+        value_size: usize,
+    ) -> MdbxResult<usize> {
+        self.put_multiple_inner(key, values, value_size, WriteFlags::MULTIPLE | WriteFlags::ALLDUPS)
+    }
+
+    /// Internal implementation for `put_multiple` and `put_multiple_overwrite`.
+    fn put_multiple_inner(
+        &mut self,
+        key: &[u8],
+        values: &[u8],
+        value_size: usize,
+        flags: WriteFlags,
+    ) -> MdbxResult<usize> {
+        // Validate DUP_FIXED requirement
+        #[cfg(debug_assertions)]
+        assertions::debug_assert_dup_fixed(self.db_flags());
+
+        if !self.db_flags().contains(DatabaseFlags::DUP_FIXED) {
+            return Err(crate::MdbxError::RequiresDupFixed);
+        }
+
+        // Validate value_size
+        if value_size == 0 {
+            return Err(crate::MdbxError::BadValSize);
+        }
+
+        // Validate values.len() is divisible by value_size
+        if !values.len().is_multiple_of(value_size) {
+            return Err(crate::MdbxError::BadValSize);
+        }
+
+        // Calculate element count; early return if nothing to insert
+        let count = values.len() / value_size;
+        if count == 0 {
+            return Ok(0);
+        }
+
+        // Build MDBX_val structures
+        let key_val = ffi::MDBX_val { iov_len: key.len(), iov_base: key.as_ptr() as *mut c_void };
+
+        // Array of two MDBX_val as required by MDBX_MULTIPLE:
+        // - data[0].iov_len = size of a single data element
+        // - data[0].iov_base = pointer to contiguous array of data elements
+        // - data[1].iov_len = count of elements to store (input); actual count written (output)
+        // - data[1].iov_base = unused
+        let mut data_vals: [ffi::MDBX_val; 2] = [
+            ffi::MDBX_val { iov_len: value_size, iov_base: values.as_ptr() as *mut c_void },
+            ffi::MDBX_val { iov_len: count, iov_base: ptr::null_mut() },
+        ];
+
+        // SAFETY: cursor and txn_ptr are valid within with_txn_ptr block.
+        // data_vals is properly structured per MDBX_MULTIPLE requirements.
+        mdbx_result(self.access.with_txn_ptr(|_| unsafe {
+            ffi::mdbx_cursor_put(self.cursor, &key_val, data_vals.as_mut_ptr(), flags.bits())
+        }))?;
+
+        // Return actual count written
+        Ok(data_vals[1].iov_len)
+    }
 }
 
 impl<'tx, K> Clone for Cursor<'tx, K>

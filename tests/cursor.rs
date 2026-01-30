@@ -1529,4 +1529,219 @@ mod append_debug_tests {
         let mut cursor = txn.cursor(db).unwrap();
         let _ = cursor.iter_dupfixed_start::<Vec<u8>, [u8; 4]>();
     }
+
+    #[test]
+    #[should_panic(expected = "Operation requires DUP_FIXED database flag")]
+    fn test_put_multiple_on_non_dupfixed_panics() {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+
+        let txn = env.begin_rw_sync().unwrap();
+        let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
+
+        let mut cursor = txn.cursor(db).unwrap();
+        let values = [1u32.to_le_bytes(), 2u32.to_le_bytes()].concat();
+        let _ = cursor.put_multiple(b"key", &values, 4);
+    }
+}
+
+// =============================================================================
+// PUT_MULTIPLE Tests
+// =============================================================================
+
+fn test_put_multiple_basic_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
+    let dir = tempdir().unwrap();
+    let env = Environment::builder().open(dir.path()).unwrap();
+
+    // Create DUPFIXED database
+    let txn = begin_rw(&env).unwrap();
+    let db = txn.create_db(None, DatabaseFlags::DUP_SORT | DatabaseFlags::DUP_FIXED).unwrap();
+
+    // Insert multiple 4-byte values for a key using put_multiple
+    let values: Vec<u8> =
+        [1u32, 2u32, 3u32, 4u32, 5u32].iter().flat_map(|v| v.to_le_bytes()).collect();
+
+    let mut cursor = txn.cursor(db).unwrap();
+    let count = cursor.put_multiple(b"key1", &values, 4).unwrap();
+    assert_eq!(count, 5);
+
+    drop(cursor);
+    txn.commit().unwrap();
+
+    // Verify with get_multiple
+    let txn = begin_ro(&env).unwrap();
+    let db = txn.open_db(None).unwrap();
+    let mut cursor = txn.cursor(db).unwrap();
+
+    cursor.first::<(), ()>().unwrap();
+    let data: Cow<'_, [u8]> = cursor.get_multiple().unwrap().unwrap();
+
+    // Should contain all 5 values (20 bytes)
+    assert_eq!(data.len(), 20);
+
+    // Parse and verify values
+    let read_values: Vec<u32> =
+        data.chunks(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
+    assert_eq!(read_values, vec![1, 2, 3, 4, 5]);
+}
+
+#[test]
+fn test_put_multiple_basic_v1() {
+    test_put_multiple_basic_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_put_multiple_basic_v2() {
+    test_put_multiple_basic_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+fn test_put_multiple_overwrite_replaces_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
+    let dir = tempdir().unwrap();
+    let env = Environment::builder().open(dir.path()).unwrap();
+
+    // Create DUPFIXED database and insert initial values
+    {
+        let txn = begin_rw(&env).unwrap();
+        let db = txn.create_db(None, DatabaseFlags::DUP_SORT | DatabaseFlags::DUP_FIXED).unwrap();
+
+        let initial_values: Vec<u8> =
+            [10u32, 20u32, 30u32].iter().flat_map(|v| v.to_le_bytes()).collect();
+
+        let mut cursor = txn.cursor(db).unwrap();
+        cursor.put_multiple(b"key1", &initial_values, 4).unwrap();
+        drop(cursor);
+        txn.commit().unwrap();
+    }
+
+    // Replace all values using put_multiple_overwrite
+    {
+        let txn = begin_rw(&env).unwrap();
+        let db = txn.open_db(None).unwrap();
+
+        let new_values: Vec<u8> = [100u32, 200u32].iter().flat_map(|v| v.to_le_bytes()).collect();
+
+        let mut cursor = txn.cursor(db).unwrap();
+        let count = cursor.put_multiple_overwrite(b"key1", &new_values, 4).unwrap();
+        assert_eq!(count, 2);
+        drop(cursor);
+        txn.commit().unwrap();
+    }
+
+    // Verify only new values exist
+    let txn = begin_ro(&env).unwrap();
+    let db = txn.open_db(None).unwrap();
+    let mut cursor = txn.cursor(db).unwrap();
+
+    cursor.first::<(), ()>().unwrap();
+    let data: Cow<'_, [u8]> = cursor.get_multiple().unwrap().unwrap();
+
+    // Should contain only 2 values (8 bytes)
+    assert_eq!(data.len(), 8);
+
+    let read_values: Vec<u32> =
+        data.chunks(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
+    assert_eq!(read_values, vec![100, 200]);
+}
+
+#[test]
+fn test_put_multiple_overwrite_replaces_v1() {
+    test_put_multiple_overwrite_replaces_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_put_multiple_overwrite_replaces_v2() {
+    test_put_multiple_overwrite_replaces_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+fn test_put_multiple_bad_value_size_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    _begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
+    let dir = tempdir().unwrap();
+    let env = Environment::builder().open(dir.path()).unwrap();
+
+    let txn = begin_rw(&env).unwrap();
+    let db = txn.create_db(None, DatabaseFlags::DUP_SORT | DatabaseFlags::DUP_FIXED).unwrap();
+
+    let mut cursor = txn.cursor(db).unwrap();
+
+    // Test value_size == 0
+    let result = cursor.put_multiple(b"key", b"somedata", 0);
+    assert!(matches!(result, Err(MdbxError::BadValSize)));
+
+    // Test values.len() not divisible by value_size
+    let result = cursor.put_multiple(b"key", b"12345", 4); // 5 bytes not divisible by 4
+    assert!(matches!(result, Err(MdbxError::BadValSize)));
+}
+
+#[test]
+fn test_put_multiple_bad_value_size_v1() {
+    test_put_multiple_bad_value_size_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_put_multiple_bad_value_size_v2() {
+    test_put_multiple_bad_value_size_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+fn test_put_multiple_empty_values_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    _begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
+    let dir = tempdir().unwrap();
+    let env = Environment::builder().open(dir.path()).unwrap();
+
+    let txn = begin_rw(&env).unwrap();
+    let db = txn.create_db(None, DatabaseFlags::DUP_SORT | DatabaseFlags::DUP_FIXED).unwrap();
+
+    let mut cursor = txn.cursor(db).unwrap();
+
+    // Empty values slice should return Ok(0)
+    let count = cursor.put_multiple(b"key", &[], 4).unwrap();
+    assert_eq!(count, 0);
+}
+
+#[test]
+fn test_put_multiple_empty_values_v1() {
+    test_put_multiple_empty_values_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_put_multiple_empty_values_v2() {
+    test_put_multiple_empty_values_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+// Release-build test: verify runtime error instead of panic
+#[cfg(not(debug_assertions))]
+#[test]
+fn test_put_multiple_requires_dupfixed_returns_error() {
+    let dir = tempdir().unwrap();
+    let env = Environment::builder().open(dir.path()).unwrap();
+
+    let txn = env.begin_rw_sync().unwrap();
+    let db = txn.create_db(None, DatabaseFlags::DUP_SORT).unwrap();
+
+    let mut cursor = txn.cursor(db).unwrap();
+    let values = [1u32.to_le_bytes(), 2u32.to_le_bytes()].concat();
+
+    let result = cursor.put_multiple(b"key", &values, 4);
+    assert!(matches!(result, Err(MdbxError::RequiresDupFixed)));
 }

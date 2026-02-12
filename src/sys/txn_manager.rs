@@ -42,7 +42,7 @@ pub(crate) struct Commit {
     pub(crate) span: tracing::Span,
 }
 
-/// Messages sent to the [`TxnManager`].
+/// Messages sent to the [`LifecycleHandle`].
 pub(crate) enum LifecycleEvent {
     Begin(Begin),
     Abort(Abort),
@@ -99,7 +99,7 @@ pub(crate) struct RwSyncLifecycle {
 }
 
 impl RwSyncLifecycle {
-    /// Creates a new [`TxnManager`], spawns a background task, returns
+    /// Creates a new [`LifecycleHandle`], spawns a background task, returns
     /// a sender to communicate with it.
     pub(crate) fn spawn(env: EnvPtr) -> LifecycleHandle {
         let (tx, rx) = sync_channel(0);
@@ -133,12 +133,12 @@ impl RwSyncLifecycle {
         sender.send(mdbx_result(unsafe { ffi::mdbx_txn_commit_ex(tx.0, latency.0) })).unwrap();
     }
 
-    /// Spawns a new [`std::thread`] that listens to incoming [`RwSyncLifecycle::Message`] messages,
+    /// Spawns a new [`std::thread`] that listens to incoming [`LifecycleEvent`] messages,
     /// executes an FFI function, and returns the result on the provided channel.
     ///
-    /// - [`RwSyncLifecycle::Message::Begin`] opens a new transaction with [`ffi::mdbx_txn_begin_ex`]
-    /// - [`RwSyncLifecycle::Message::Abort`] aborts a transaction with [`ffi::mdbx_txn_abort`]
-    /// - [`RwSyncLifecycle::Message::Commit`] commits a transaction with [`ffi::mdbx_txn_commit_ex`]
+    /// - [`LifecycleEvent::Begin`] opens a new transaction with [`ffi::mdbx_txn_begin_ex`]
+    /// - [`LifecycleEvent::Abort`] aborts a transaction with [`ffi::mdbx_txn_abort`]
+    /// - [`LifecycleEvent::Commit`] commits a transaction with [`ffi::mdbx_txn_commit_ex`]
     fn start_message_listener(self) {
         let task = move || {
             loop {

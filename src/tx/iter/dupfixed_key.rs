@@ -135,7 +135,7 @@ where
     /// Fetch the next page of values for the current key.
     ///
     /// Unlike
-    /// [`IterDupFixed::fetch_next_page`](crate::tx::aliases::IterDupFixed),
+    /// [`IterDupFixed::fetch_next_page`](super::IterDupFixed),
     /// this does NOT move to the next key when pages are exhausted. It simply
     /// returns `Ok(false)` to signal exhaustion.
     ///

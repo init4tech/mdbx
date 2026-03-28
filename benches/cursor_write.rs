@@ -27,7 +27,7 @@ fn setup_plain_env(n: u32) -> (tempfile::TempDir, signet_libmdbx::Environment) {
 
 // PARITY: evmdb/write_put_100
 fn bench_cursor_put_sync(c: &mut Criterion) {
-    let items: Vec<(String, String)> = (0..N).map(|i| (get_key(i), get_data(i))).collect();
+    let items: Vec<(String, Vec<u8>)> = (0..N).map(|i| (get_key(i), get_data(i))).collect();
     let (_dir, env) = setup_plain_env(0);
 
     c.bench_function("cursor_write::put::sync", |b| {
@@ -40,7 +40,7 @@ fn bench_cursor_put_sync(c: &mut Criterion) {
             |(txn, db)| {
                 let mut cursor = txn.cursor(db).unwrap();
                 for (key, data) in &items {
-                    cursor.put(key.as_bytes(), data.as_bytes(), WriteFlags::empty()).unwrap();
+                    cursor.put(key.as_bytes(), data.as_slice(), WriteFlags::empty()).unwrap();
                 }
             },
             BatchSize::PerIteration,
@@ -50,7 +50,7 @@ fn bench_cursor_put_sync(c: &mut Criterion) {
 
 // PARITY: evmdb/write_put_100
 fn bench_cursor_put_unsync(c: &mut Criterion) {
-    let items: Vec<(String, String)> = (0..N).map(|i| (get_key(i), get_data(i))).collect();
+    let items: Vec<(String, Vec<u8>)> = (0..N).map(|i| (get_key(i), get_data(i))).collect();
     let (_dir, env) = setup_plain_env(0);
 
     c.bench_function("cursor_write::put::single_thread", |b| {
@@ -63,7 +63,7 @@ fn bench_cursor_put_unsync(c: &mut Criterion) {
             |(txn, db)| {
                 let mut cursor = txn.cursor(db).unwrap();
                 for (key, data) in &items {
-                    cursor.put(key.as_bytes(), data.as_bytes(), WriteFlags::empty()).unwrap();
+                    cursor.put(key.as_bytes(), data.as_slice(), WriteFlags::empty()).unwrap();
                 }
             },
             BatchSize::PerIteration,
@@ -114,7 +114,7 @@ fn bench_cursor_del_unsync(c: &mut Criterion) {
 // PARITY: evmdb/write_put_100_sorted
 fn bench_cursor_append_sync(c: &mut Criterion) {
     // Keys must be lexicographically sorted for append; zero-pad to ensure order.
-    let items: Vec<(String, String)> = (0..N).map(|i| (get_key(i), get_data(i))).collect();
+    let items: Vec<(String, Vec<u8>)> = (0..N).map(|i| (get_key(i), get_data(i))).collect();
     let (_dir, env) = setup_plain_env(0);
 
     c.bench_function("cursor_write::append::sync", |b| {
@@ -127,7 +127,7 @@ fn bench_cursor_append_sync(c: &mut Criterion) {
             |(txn, db)| {
                 let mut cursor = txn.cursor(db).unwrap();
                 for (key, data) in &items {
-                    cursor.append(key.as_bytes(), data.as_bytes()).unwrap();
+                    cursor.append(key.as_bytes(), data.as_slice()).unwrap();
                 }
             },
             BatchSize::PerIteration,
@@ -137,7 +137,7 @@ fn bench_cursor_append_sync(c: &mut Criterion) {
 
 // PARITY: evmdb/write_put_100_sorted
 fn bench_cursor_append_unsync(c: &mut Criterion) {
-    let items: Vec<(String, String)> = (0..N).map(|i| (get_key(i), get_data(i))).collect();
+    let items: Vec<(String, Vec<u8>)> = (0..N).map(|i| (get_key(i), get_data(i))).collect();
     let (_dir, env) = setup_plain_env(0);
 
     c.bench_function("cursor_write::append::single_thread", |b| {
@@ -150,7 +150,7 @@ fn bench_cursor_append_unsync(c: &mut Criterion) {
             |(txn, db)| {
                 let mut cursor = txn.cursor(db).unwrap();
                 for (key, data) in &items {
-                    cursor.append(key.as_bytes(), data.as_bytes()).unwrap();
+                    cursor.append(key.as_bytes(), data.as_slice()).unwrap();
                 }
             },
             BatchSize::PerIteration,

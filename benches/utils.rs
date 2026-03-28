@@ -17,9 +17,10 @@ pub fn get_key(n: u32) -> String {
     format!("key{n:028}")
 }
 
-// Generate a DB data string for testing.
-pub fn get_data(n: u32) -> String {
-    format!("data{n}")
+/// Generate a 128-byte value for benchmarking.
+pub fn get_data(n: u32) -> Vec<u8> {
+    let seed = format!("data{n:010}");
+    seed.as_bytes().iter().copied().cycle().take(128).collect()
 }
 
 // Raw transaction utilities

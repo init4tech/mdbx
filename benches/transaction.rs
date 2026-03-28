@@ -93,7 +93,7 @@ fn bench_put_rand_raw(c: &mut Criterion) {
     let n = 100u32;
     let (_dir, env) = setup_bench_db(0);
 
-    let mut items: Vec<(String, String)> = (0..n).map(|n| (get_key(n), get_data(n))).collect();
+    let mut items: Vec<(String, Vec<u8>)> = (0..n).map(|n| (get_key(n), get_data(n))).collect();
     items.shuffle(&mut StdRng::from_seed(Default::default()));
 
     let dbi = create_ro_sync(&env).open_db(None).unwrap().dbi();
@@ -116,7 +116,7 @@ fn bench_put_rand_raw(c: &mut Criterion) {
                     key_val.iov_len = key.len();
                     key_val.iov_base = key.as_bytes().as_ptr().cast_mut().cast();
                     data_val.iov_len = data.len();
-                    data_val.iov_base = data.as_bytes().as_ptr().cast_mut().cast();
+                    data_val.iov_base = data.as_ptr().cast_mut().cast();
 
                     i += mdbx_put(txn, dbi, &raw const key_val, &raw mut data_val, 0);
                 }
@@ -132,7 +132,7 @@ fn bench_put_rand_sync(c: &mut Criterion) {
     let n = 100u32;
     let (_dir, env) = setup_bench_db(0);
 
-    let mut items: Vec<(String, String)> = (0..n).map(|n| (get_key(n), get_data(n))).collect();
+    let mut items: Vec<(String, Vec<u8>)> = (0..n).map(|n| (get_key(n), get_data(n))).collect();
     items.shuffle(&mut StdRng::from_seed(Default::default()));
 
     c.bench_function("transaction::put::rand", |b| {
@@ -156,7 +156,7 @@ fn bench_put_rand_unsync(c: &mut Criterion) {
     let n = 100u32;
     let (_dir, env) = setup_bench_db(0);
 
-    let mut items: Vec<(String, String)> = (0..n).map(|n| (get_key(n), get_data(n))).collect();
+    let mut items: Vec<(String, Vec<u8>)> = (0..n).map(|n| (get_key(n), get_data(n))).collect();
     items.shuffle(&mut StdRng::from_seed(Default::default()));
 
     c.bench_function("transaction::put::rand::single_thread", |b| {

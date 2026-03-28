@@ -32,7 +32,7 @@ fn setup_scaling_env(n: u32, value_size: usize) -> (tempfile::TempDir, Environme
     (dir, env)
 }
 
-// PARITY: evmdb/sequential_get
+// PARITY: evmdb/sequential_get — DO NOT EDIT without updating evmdb
 fn bench_sequential_get(c: &mut Criterion) {
     let mut group = c.benchmark_group("scaling::sequential_get");
 
@@ -58,7 +58,7 @@ fn bench_sequential_get(c: &mut Criterion) {
     group.finish();
 }
 
-// PARITY: evmdb/random_get
+// PARITY: evmdb/random_get — DO NOT EDIT without updating evmdb
 fn bench_random_get(c: &mut Criterion) {
     let mut group = c.benchmark_group("scaling::random_get");
 
@@ -85,7 +85,7 @@ fn bench_random_get(c: &mut Criterion) {
     group.finish();
 }
 
-// PARITY: evmdb/full_iteration
+// PARITY: evmdb/full_iteration — DO NOT EDIT without updating evmdb
 fn bench_full_iteration(c: &mut Criterion) {
     let mut group = c.benchmark_group("scaling::full_iteration");
 
@@ -110,7 +110,7 @@ fn bench_full_iteration(c: &mut Criterion) {
     group.finish();
 }
 
-// PARITY: evmdb/put_sorted
+// PARITY: evmdb/put_sorted — DO NOT EDIT without updating evmdb
 fn bench_append_ordered_put(c: &mut Criterion) {
     let mut group = c.benchmark_group("scaling::append_ordered_put");
 

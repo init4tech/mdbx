@@ -29,7 +29,7 @@ fn setup_arc_env(n: u32) -> (tempfile::TempDir, Arc<Environment>) {
     (dir, Arc::new(env))
 }
 
-// PARITY: evmdb/readers_no_writer
+// PARITY: evmdb/readers_no_writer — DO NOT EDIT without updating evmdb
 fn bench_n_readers_no_writer(c: &mut Criterion) {
     let mut group = c.benchmark_group("concurrent::readers_no_writer");
 
@@ -77,7 +77,7 @@ fn bench_n_readers_no_writer(c: &mut Criterion) {
     group.finish();
 }
 
-// PARITY: evmdb/readers_with_writer
+// PARITY: evmdb/readers_with_writer — DO NOT EDIT without updating evmdb
 fn bench_n_readers_one_writer(c: &mut Criterion) {
     let mut group = c.benchmark_group("concurrent::readers_one_writer");
 

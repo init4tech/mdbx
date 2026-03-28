@@ -51,7 +51,7 @@ fn bench_get_seq_iter(c: &mut Criterion) {
     });
 }
 
-// PARITY: evmdb/cursor_seek_first_iterate
+// PARITY: evmdb/cursor_seek_first_iterate — DO NOT EDIT without updating evmdb
 fn bench_get_seq_cursor(c: &mut Criterion) {
     let n = 1000;
     let (_dir, env) = setup_bench_db(n);
@@ -146,7 +146,7 @@ fn bench_get_seq_iter_single_thread(c: &mut Criterion) {
     });
 }
 
-// PARITY: evmdb/cursor_seek_first_iterate
+// PARITY: evmdb/cursor_seek_first_iterate — DO NOT EDIT without updating evmdb
 fn bench_get_seq_cursor_single_thread(c: &mut Criterion) {
     let n = 1000;
     let (_dir, env) = setup_bench_db(n);

@@ -25,11 +25,14 @@ fuzz_target!(|data: &[u8]| {
     // return a typed error — never panic.
     let _ = txn.put(default_db, data, b"value", WriteFlags::empty());
 
-    // Attempt put on the INTEGER_KEY database; fuzz bytes are likely not a
-    // valid 4- or 8-byte key, so we expect an error in most cases.
-    let _ = txn.put(int_db, data, b"value", WriteFlags::empty());
+    // INTEGER_KEY requires exactly 4 or 8 byte keys. MDBX aborts (not
+    // errors) on invalid sizes, so only feed valid-length keys to this db.
+    // We still fuzz the *content* of those keys.
+    if data.len() == 4 || data.len() == 8 {
+        let _ = txn.put(int_db, data, b"value", WriteFlags::empty());
+        let _: signet_libmdbx::ReadResult<Option<Vec<u8>>> = txn.get(int_db.dbi(), data);
+    }
 
-    // Attempt get with fuzz bytes as key on both databases.
+    // Attempt get with fuzz bytes as key on the default database.
     let _: signet_libmdbx::ReadResult<Option<Vec<u8>>> = txn.get(default_db.dbi(), data);
-    let _: signet_libmdbx::ReadResult<Option<Vec<u8>>> = txn.get(int_db.dbi(), data);
 });

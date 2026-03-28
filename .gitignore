@@ -3,3 +3,4 @@
 Cargo.lock
 .idea/
 mdbx-sys/target/
+docs/

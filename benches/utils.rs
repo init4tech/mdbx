@@ -14,7 +14,7 @@ pub const NAMED_DB: &str = "named_benchmark_db";
 
 /// Generate a DB key string for testing.
 pub fn get_key(n: u32) -> String {
-    format!("key{n}")
+    format!("key{n:028}")
 }
 
 // Generate a DB data string for testing.

@@ -11,7 +11,7 @@ use tempfile::tempdir;
 use utils::*;
 
 const N_ROWS: u32 = 1_000;
-const READER_COUNTS: &[usize] = &[1, 4, 8];
+const READER_COUNTS: &[usize] = &[1, 4, 8, 32, 128];
 
 fn setup_arc_env(n: u32) -> (tempfile::TempDir, Arc<Environment>) {
     let dir = tempdir().unwrap();
@@ -20,14 +20,16 @@ fn setup_arc_env(n: u32) -> (tempfile::TempDir, Arc<Environment>) {
         let txn = env.begin_rw_unsync().unwrap();
         let db = txn.open_db(None).unwrap();
         for i in 0..n {
-            txn.put(db, get_key(i), get_data(i), WriteFlags::empty()).unwrap();
+            let value: Vec<u8> =
+                format!("data{i:010}").as_bytes().iter().copied().cycle().take(128).collect();
+            txn.put(db, get_key(i), value, WriteFlags::empty()).unwrap();
         }
         txn.commit().unwrap();
     }
     (dir, Arc::new(env))
 }
 
-/// N readers, no writer — read throughput baseline.
+// PARITY: evmdb/readers_no_writer
 fn bench_n_readers_no_writer(c: &mut Criterion) {
     let mut group = c.benchmark_group("concurrent::readers_no_writer");
 
@@ -75,7 +77,7 @@ fn bench_n_readers_no_writer(c: &mut Criterion) {
     group.finish();
 }
 
-/// N readers + 1 writer — read throughput under write contention.
+// PARITY: evmdb/readers_with_writer
 fn bench_n_readers_one_writer(c: &mut Criterion) {
     let mut group = c.benchmark_group("concurrent::readers_one_writer");
 

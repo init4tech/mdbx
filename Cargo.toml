@@ -68,3 +68,7 @@ harness = false
 [[bench]]
 name = "deletion"
 harness = false
+
+[[bench]]
+name = "cursor_write"
+harness = false

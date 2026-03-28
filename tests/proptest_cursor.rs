@@ -365,3 +365,59 @@ proptest! {
         prop_assert_eq!(retrieved, keys);
     }
 }
+
+// =============================================================================
+// Cursor set_range correctness (migrated)
+// =============================================================================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(128))]
+
+    #[test]
+    fn cursor_set_range_correctness_v1(
+        entries in prop::collection::vec((arb_safe_key(), arb_bytes()), 2..10),
+        search_key in arb_safe_key(),
+    ) {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+        let txn = env.begin_rw_sync().unwrap();
+        let db = txn.open_db(None).unwrap();
+        let mut inserted: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+        for (key, value) in &entries {
+            if txn.put(db, key, value, WriteFlags::empty()).is_ok() {
+                inserted.push((key.clone(), value.clone()));
+            }
+        }
+        prop_assume!(!inserted.is_empty());
+        inserted.sort_by(|a, b| a.0.cmp(&b.0));
+        inserted.dedup_by(|a, b| a.0 == b.0);
+        let expected = inserted.iter().find(|(k, _)| k >= &search_key).cloned();
+        let mut cursor = txn.cursor(db).unwrap();
+        let result: Option<(Vec<u8>, Vec<u8>)> = cursor.set_range(&search_key).unwrap();
+        prop_assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn cursor_set_range_correctness_v2(
+        entries in prop::collection::vec((arb_safe_key(), arb_bytes()), 2..10),
+        search_key in arb_safe_key(),
+    ) {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+        let txn = env.begin_rw_unsync().unwrap();
+        let db = txn.open_db(None).unwrap();
+        let mut inserted: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+        for (key, value) in &entries {
+            if txn.put(db, key, value, WriteFlags::empty()).is_ok() {
+                inserted.push((key.clone(), value.clone()));
+            }
+        }
+        prop_assume!(!inserted.is_empty());
+        inserted.sort_by(|a, b| a.0.cmp(&b.0));
+        inserted.dedup_by(|a, b| a.0 == b.0);
+        let expected = inserted.iter().find(|(k, _)| k >= &search_key).cloned();
+        let mut cursor = txn.cursor(db).unwrap();
+        let result: Option<(Vec<u8>, Vec<u8>)> = cursor.set_range(&search_key).unwrap();
+        prop_assert_eq!(result, expected);
+    }
+}

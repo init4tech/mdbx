@@ -68,3 +68,23 @@ harness = false
 [[bench]]
 name = "deletion"
 harness = false
+
+[[bench]]
+name = "cursor_write"
+harness = false
+
+[[bench]]
+name = "reserve"
+harness = false
+
+[[bench]]
+name = "nested_txn"
+harness = false
+
+[[bench]]
+name = "concurrent"
+harness = false
+
+[[bench]]
+name = "scaling"
+harness = false

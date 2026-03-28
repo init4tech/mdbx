@@ -93,7 +93,7 @@ fn bench_put_rand_raw(c: &mut Criterion) {
     let n = 100u32;
     let (_dir, env) = setup_bench_db(0);
 
-    let mut items: Vec<(String, String)> = (0..n).map(|n| (get_key(n), get_data(n))).collect();
+    let mut items: Vec<(String, Vec<u8>)> = (0..n).map(|n| (get_key(n), get_data(n))).collect();
     items.shuffle(&mut StdRng::from_seed(Default::default()));
 
     let dbi = create_ro_sync(&env).open_db(None).unwrap().dbi();
@@ -116,7 +116,7 @@ fn bench_put_rand_raw(c: &mut Criterion) {
                     key_val.iov_len = key.len();
                     key_val.iov_base = key.as_bytes().as_ptr().cast_mut().cast();
                     data_val.iov_len = data.len();
-                    data_val.iov_base = data.as_bytes().as_ptr().cast_mut().cast();
+                    data_val.iov_base = data.as_ptr().cast_mut().cast();
 
                     i += mdbx_put(txn, dbi, &raw const key_val, &raw mut data_val, 0);
                 }
@@ -132,7 +132,7 @@ fn bench_put_rand_sync(c: &mut Criterion) {
     let n = 100u32;
     let (_dir, env) = setup_bench_db(0);
 
-    let mut items: Vec<(String, String)> = (0..n).map(|n| (get_key(n), get_data(n))).collect();
+    let mut items: Vec<(String, Vec<u8>)> = (0..n).map(|n| (get_key(n), get_data(n))).collect();
     items.shuffle(&mut StdRng::from_seed(Default::default()));
 
     c.bench_function("transaction::put::rand", |b| {
@@ -156,7 +156,7 @@ fn bench_put_rand_unsync(c: &mut Criterion) {
     let n = 100u32;
     let (_dir, env) = setup_bench_db(0);
 
-    let mut items: Vec<(String, String)> = (0..n).map(|n| (get_key(n), get_data(n))).collect();
+    let mut items: Vec<(String, Vec<u8>)> = (0..n).map(|n| (get_key(n), get_data(n))).collect();
     items.shuffle(&mut StdRng::from_seed(Default::default()));
 
     c.bench_function("transaction::put::rand::single_thread", |b| {
@@ -205,11 +205,61 @@ fn bench_tx_create_unsync(c: &mut Criterion) {
     });
 }
 
+// COMMIT
+
+const COMMIT_ENTRY_COUNTS: &[u32] = &[10, 100, 1_000, 10_000];
+const COMMIT_VALUE_SIZES: &[usize] = &[32, 128, 512];
+
+fn make_commit_value(i: u32, size: usize) -> Vec<u8> {
+    let seed = format!("data{i:010}");
+    seed.as_bytes().iter().copied().cycle().take(size).collect()
+}
+
+/// Measures commit cost in isolation. The setup phase writes N entries of
+/// a given value size (excluded from timing), then the timed phase calls
+/// only `commit()`.
+fn bench_commit_cost(c: &mut Criterion) {
+    let mut group = c.benchmark_group("transaction::commit");
+
+    for &size in COMMIT_VALUE_SIZES {
+        for &n in COMMIT_ENTRY_COUNTS {
+            let keys: Vec<String> = (0..n).map(get_key).collect();
+            let values: Vec<Vec<u8>> = (0..n).map(|i| make_commit_value(i, size)).collect();
+
+            group.bench_with_input(
+                criterion::BenchmarkId::new(format!("{size}B"), n),
+                &n,
+                |b, _| {
+                    b.iter_batched(
+                        || {
+                            let dir = tempfile::tempdir().unwrap();
+                            let env =
+                                signet_libmdbx::Environment::builder().open(dir.path()).unwrap();
+                            let txn = env.begin_rw_unsync().unwrap();
+                            let db = txn.open_db(None).unwrap();
+                            for (key, value) in keys.iter().zip(values.iter()) {
+                                txn.put(db, key, value, WriteFlags::empty()).unwrap();
+                            }
+                            (dir, env, txn)
+                        },
+                        |(_dir, _env, txn)| {
+                            txn.commit().unwrap();
+                        },
+                        criterion::BatchSize::PerIteration,
+                    )
+                },
+            );
+        }
+    }
+    group.finish();
+}
+
 criterion_group! {
     name = benches;
     config = Criterion::default();
     targets = bench_get_rand_sync, bench_get_rand_raw, bench_get_rand_unsync,
               bench_put_rand_sync, bench_put_rand_raw, bench_put_rand_unsync,
-              bench_tx_create_raw, bench_tx_create_sync, bench_tx_create_unsync
+              bench_tx_create_raw, bench_tx_create_sync, bench_tx_create_unsync,
+              bench_commit_cost
 }
 criterion_main!(benches);

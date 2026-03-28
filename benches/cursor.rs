@@ -8,7 +8,7 @@ use utils::*;
 
 /// Benchmark of iterator sequential read performance.
 fn bench_get_seq_iter(c: &mut Criterion) {
-    let n = 100;
+    let n = 1000;
     let (_dir, env) = setup_bench_db(n);
     let txn = create_ro_sync(&env);
     let db = txn.open_db(None).unwrap();
@@ -51,9 +51,9 @@ fn bench_get_seq_iter(c: &mut Criterion) {
     });
 }
 
-/// Benchmark of cursor sequential read performance.
+// PARITY: evmdb/cursor_seek_first_iterate — DO NOT EDIT without updating evmdb
 fn bench_get_seq_cursor(c: &mut Criterion) {
-    let n = 100;
+    let n = 1000;
     let (_dir, env) = setup_bench_db(n);
     let txn = create_ro_sync(&env);
     let db = txn.open_db(None).unwrap();
@@ -76,7 +76,7 @@ fn bench_get_seq_cursor(c: &mut Criterion) {
 }
 
 fn bench_get_seq_for_loop(c: &mut Criterion) {
-    let n = 100;
+    let n = 1000;
     let (_dir, env) = setup_bench_db(n);
     let txn = create_ro_sync(&env);
     let db = txn.open_db(None).unwrap();
@@ -103,7 +103,7 @@ fn bench_get_seq_for_loop(c: &mut Criterion) {
 
 /// Benchmark of iterator sequential read performance (single-thread).
 fn bench_get_seq_iter_single_thread(c: &mut Criterion) {
-    let n = 100;
+    let n = 1000;
     let (_dir, env) = setup_bench_db(n);
     let txn = create_ro_unsync(&env);
     let db = txn.open_db(None).unwrap();
@@ -146,9 +146,9 @@ fn bench_get_seq_iter_single_thread(c: &mut Criterion) {
     });
 }
 
-/// Benchmark of cursor sequential read performance (single-thread).
+// PARITY: evmdb/cursor_seek_first_iterate — DO NOT EDIT without updating evmdb
 fn bench_get_seq_cursor_single_thread(c: &mut Criterion) {
-    let n = 100;
+    let n = 1000;
     let (_dir, env) = setup_bench_db(n);
     let txn = create_ro_unsync(&env);
     let db = txn.open_db(None).unwrap();
@@ -171,7 +171,7 @@ fn bench_get_seq_cursor_single_thread(c: &mut Criterion) {
 }
 
 fn bench_get_seq_for_loop_single_thread(c: &mut Criterion) {
-    let n = 100;
+    let n = 1000;
     let (_dir, env) = setup_bench_db(n);
     let txn = create_ro_unsync(&env);
     let db = txn.open_db(None).unwrap();
@@ -198,7 +198,7 @@ fn bench_get_seq_for_loop_single_thread(c: &mut Criterion) {
 
 /// Benchmark of raw MDBX sequential read performance (control).
 fn bench_get_seq_raw(c: &mut Criterion) {
-    let n = 100;
+    let n = 1000;
     let (_dir, env) = setup_bench_db(n);
 
     let mut key = MDBX_val { iov_len: 0, iov_base: ptr::null_mut() };

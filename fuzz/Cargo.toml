@@ -1,0 +1,46 @@
+[package]
+name = "signet-libmdbx-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+signet-libmdbx = { path = ".." }
+tempfile = "3"
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "decode_cow"
+path = "fuzz_targets/decode_cow.rs"
+doc = false
+
+[[bin]]
+name = "decode_array"
+path = "fuzz_targets/decode_array.rs"
+doc = false
+
+[[bin]]
+name = "decode_object_length"
+path = "fuzz_targets/decode_object_length.rs"
+doc = false
+
+[[bin]]
+name = "dirty_page_roundtrip"
+path = "fuzz_targets/dirty_page_roundtrip.rs"
+doc = false
+
+[[bin]]
+name = "dupfixed_page_decode"
+path = "fuzz_targets/dupfixed_page_decode.rs"
+doc = false
+
+[[bin]]
+name = "key_validation"
+path = "fuzz_targets/key_validation.rs"
+doc = false

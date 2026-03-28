@@ -205,11 +205,61 @@ fn bench_tx_create_unsync(c: &mut Criterion) {
     });
 }
 
+// COMMIT
+
+const COMMIT_ENTRY_COUNTS: &[u32] = &[10, 100, 1_000, 10_000];
+const COMMIT_VALUE_SIZES: &[usize] = &[32, 128, 512];
+
+fn make_commit_value(i: u32, size: usize) -> Vec<u8> {
+    let seed = format!("data{i:010}");
+    seed.as_bytes().iter().copied().cycle().take(size).collect()
+}
+
+/// Measures commit cost in isolation. The setup phase writes N entries of
+/// a given value size (excluded from timing), then the timed phase calls
+/// only `commit()`.
+fn bench_commit_cost(c: &mut Criterion) {
+    let mut group = c.benchmark_group("transaction::commit");
+
+    for &size in COMMIT_VALUE_SIZES {
+        for &n in COMMIT_ENTRY_COUNTS {
+            let keys: Vec<String> = (0..n).map(get_key).collect();
+            let values: Vec<Vec<u8>> = (0..n).map(|i| make_commit_value(i, size)).collect();
+
+            group.bench_with_input(
+                criterion::BenchmarkId::new(format!("{size}B"), n),
+                &n,
+                |b, _| {
+                    b.iter_batched(
+                        || {
+                            let dir = tempfile::tempdir().unwrap();
+                            let env =
+                                signet_libmdbx::Environment::builder().open(dir.path()).unwrap();
+                            let txn = env.begin_rw_unsync().unwrap();
+                            let db = txn.open_db(None).unwrap();
+                            for (key, value) in keys.iter().zip(values.iter()) {
+                                txn.put(db, key, value, WriteFlags::empty()).unwrap();
+                            }
+                            (dir, env, txn)
+                        },
+                        |(_dir, _env, txn)| {
+                            txn.commit().unwrap();
+                        },
+                        criterion::BatchSize::PerIteration,
+                    )
+                },
+            );
+        }
+    }
+    group.finish();
+}
+
 criterion_group! {
     name = benches;
     config = Criterion::default();
     targets = bench_get_rand_sync, bench_get_rand_raw, bench_get_rand_unsync,
               bench_put_rand_sync, bench_put_rand_raw, bench_put_rand_unsync,
-              bench_tx_create_raw, bench_tx_create_sync, bench_tx_create_unsync
+              bench_tx_create_raw, bench_tx_create_sync, bench_tx_create_unsync,
+              bench_commit_cost
 }
 criterion_main!(benches);

@@ -4,3 +4,6 @@ Cargo.lock
 .idea/
 mdbx-sys/target/
 docs/
+fuzz/corpus/
+fuzz/artifacts/
+fuzz/target/

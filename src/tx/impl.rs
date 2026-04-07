@@ -678,6 +678,10 @@ where
     }
 }
 
+// NOTE: This impl is on Tx<K, U> with free U, not Tx<K> (where U = K::Access).
+// Rust requires Drop bounds to match the struct definition exactly, so we
+// cannot call `self.drain_cached_cursors()` here (it lives on `impl<K> Tx<K>`).
+// The drain-and-close logic is inlined instead.
 impl<K, U> Drop for Tx<K, U>
 where
     K: TransactionKind,

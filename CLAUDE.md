@@ -33,12 +33,27 @@ be mediated via the `TxAccess` trait.
 
 ## API Patterns
 
-### Cursor Creation
+### Cursor Creation and Caching
 
 ```rust
 let db = txn.open_db(None).unwrap();  // Returns Database (has dbi + flags)
 let cursor = txn.cursor(db).unwrap(); // Takes Database, NOT raw dbi
 ```
+
+Cursors are transparently cached within transactions. When a cursor is
+dropped, its raw pointer is returned to the transaction's cache. Subsequent
+`cursor()` calls reuse cached pointers, avoiding `mdbx_cursor_open`/
+`mdbx_cursor_close` overhead (~100 ns per cycle). The cache is drained
+and all pointers closed on commit or abort.
+
+`DbCache` (in `src/tx/cache.rs`) stores raw `*mut ffi::MDBX_cursor`
+pointers, which makes it `!Send + !Sync` by default. Explicit `unsafe impl
+Send + Sync for DbCache` is required because:
+- `SyncKind::Cache` requires `Cache + Send` (for `RefCell<DbCache>: Send`)
+- `SharedCache` uses `Arc<RwLock<DbCache>>` which requires `DbCache: Send + Sync`
+- This is sound because `Cursor` itself is already `unsafe impl Send + Sync`,
+  and all access to cached pointers is mediated by `RefCell` (unsync) or
+  `RwLock` (sync)
 
 ### Database Flags Validation
 

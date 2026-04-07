@@ -1,8 +1,10 @@
-#![allow(missing_docs)]
+#![allow(missing_docs, dead_code)]
+mod utils;
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use signet_libmdbx::{DatabaseFlags, Environment, WriteFlags};
 use tempfile::{TempDir, tempdir};
+use utils::quick_config;
 
 const VALUE_SIZE: usize = 100;
 const DB_NAME: &str = "deletion_bench";
@@ -73,7 +75,7 @@ fn bench_del_loop(c: &mut Criterion) {
 
 criterion_group! {
     name = benches;
-    config = Criterion::default();
+    config = quick_config();
     targets = bench_del_all_dups, bench_del_loop,
 }
 

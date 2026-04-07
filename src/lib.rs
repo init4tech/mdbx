@@ -128,21 +128,40 @@
 //!
 //! See the [`TableObject`] docs for more examples.
 //!
-//! # Debug assertions
+//! # Input Validation
 //!
-//! When compiled with debug assertions enabled (the default for
-//! `cargo build`), this crate performs additional runtime checks to
-//! catch common mistakes.
+//! MDBX's C layer **aborts the process** on certain constraint violations,
+//! such as passing a key that is not exactly 4 or 8 bytes to an
+//! [`DatabaseFlags::INTEGER_KEY`] database, or exceeding the maximum
+//! key/value size for the configured page size. These aborts cannot be
+//! caught or recovered from.
+//!
+//! This crate uses a **debug-only validation model**:
+//!
+//! - **Debug builds** (`cfg(debug_assertions)`): Rust-side assertions
+//!   check key/value constraints before they reach FFI. Violations panic
+//!   with a descriptive message. This catches bugs during development.
+//! - **Release builds**: No validation is performed. Invalid input passes
+//!   directly to MDBX for maximum performance. If the input violates
+//!   MDBX constraints, the process may abort.
+//!
+//! The following checks are performed in debug builds:
 //!
 //! 1. Key sizes are checked against the database's configured
-//!    `pagesize` and `DatabaseFlags` (e.g. `INTEGERKEY`).
+//!    `pagesize` and `DatabaseFlags` (e.g. `INTEGER_KEY`).
 //! 2. Value sizes are checked against the database's configured
-//!    `pagesize` and `DatabaseFlags` (e.g. `INTEGERDUP`).
-//! 3. For `append` operations, it checks that the key being appended is
+//!    `pagesize` and `DatabaseFlags` (e.g. `INTEGER_DUP`).
+//! 3. `INTEGER_KEY` databases require keys of exactly 4 or 8 bytes.
+//! 4. `INTEGER_DUP` databases require values of exactly 4 or 8 bytes.
+//! 5. For `append` operations, it checks that the key being appended is
 //!    greater than the current last key using lexicographic comparison.
 //!    This check is skipped for `REVERSE_KEY` and `REVERSE_DUP` databases
-//!    since they use different comparison semantics (comparing bytes from
-//!    end to beginning).
+//!    since they use different comparison semantics.
+//!
+//! **Callers are responsible for ensuring inputs are valid in release
+//! builds.** This is a deliberate design choice: the library trusts its
+//! callers in release mode for performance, and the debug assertions
+//! exist to catch bugs during development.
 //!
 //! # Provenance
 //!

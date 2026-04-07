@@ -1,7 +1,7 @@
 #![allow(missing_docs)]
 mod utils;
 
-use crate::utils::{create_ro_sync, create_ro_unsync};
+use crate::utils::{create_ro_sync, create_ro_unsync, quick_config};
 use criterion::{Criterion, criterion_group, criterion_main};
 use signet_libmdbx::{DatabaseFlags, DupItem, Environment, WriteFlags};
 use std::hint::black_box;
@@ -120,7 +120,7 @@ fn bench_iter_simple_sync(c: &mut Criterion) {
 
 criterion_group! {
     name = benches;
-    config = Criterion::default();
+    config = quick_config();
     targets = bench_iter_dupfixed, bench_iter_simple,
               bench_iter_dupfixed_sync, bench_iter_simple_sync,
 }

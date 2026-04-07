@@ -33,6 +33,24 @@ NOTE: Most of the repo came from [lmdb-rs bindings].
   - `sys` - Environment and transaction management.
   - `tx` - module contains transactions, cursors, and iterators
 
+## Input Validation
+
+MDBX's C layer **aborts the process** on certain constraint violations,
+such as passing an invalid key size to an `INTEGER_KEY` database or
+exceeding the maximum key/value size. These aborts cannot be caught.
+
+This crate uses a **debug-only validation model**:
+
+- **Debug builds** (`cfg(debug_assertions)`): Rust-side assertions check
+  key/value constraints before they reach FFI. Violations panic with a
+  descriptive message, catching bugs during development.
+- **Release builds**: No validation is performed. Invalid input passes
+  directly to MDBX for maximum performance.
+
+**Callers are responsible for ensuring inputs are valid in release
+builds.** The debug assertions exist to catch bugs during development,
+not to provide runtime safety guarantees.
+
 ## Updating the libmdbx Version
 
 To update the libmdbx version you must clone it and copy the `dist/` folder in

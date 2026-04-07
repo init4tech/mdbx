@@ -167,7 +167,7 @@ impl Environment {
     }
 
     /// Maximum retry count for the optimistic snapshot-matching loop in
-    /// [`begin_ro_sync_multi`] and [`begin_ro_unsync_multi`].
+    /// [`Self::begin_ro_sync_multi`] and [`Self::begin_ro_unsync_multi`].
     const MAX_MULTI_RETRIES: usize = 16;
 
     /// Open `n` read-only transactions guaranteed to share the same MVCC

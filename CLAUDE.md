@@ -132,6 +132,18 @@ cargo clippy --no-default-features --all-targets
 cargo +nightly fmt
 ```
 
+### Pre-push Checks (enforced by Claude hook)
+
+A Claude hook in `.claude/settings.json` runs `.claude/hooks/pre-push.sh`
+before every `git push`. The push is blocked if any check fails. The checks:
+
+- `cargo +nightly fmt -- --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo clippy --all-targets --no-default-features -- -D warnings`
+- `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps`
+
+Clippy and doc warnings are hard failures.
+
 ## Linux Testing
 
 Before committing, run the Docker Linux environment to verify changes pass on Linux:

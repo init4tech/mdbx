@@ -8,7 +8,7 @@ use utils::*;
 
 /// Benchmark of iterator sequential read performance.
 fn bench_get_seq_iter(c: &mut Criterion) {
-    let n = 100;
+    let n = 1000;
     let (_dir, env) = setup_bench_db(n);
     let txn = create_ro_sync(&env);
     let db = txn.open_db(None).unwrap();
@@ -51,17 +51,17 @@ fn bench_get_seq_iter(c: &mut Criterion) {
     });
 }
 
-/// Benchmark of cursor sequential read performance.
 fn bench_get_seq_cursor(c: &mut Criterion) {
-    let n = 100;
-    let (_dir, env) = setup_bench_db(n);
-    let txn = create_ro_sync(&env);
-    let db = txn.open_db(None).unwrap();
-    // Note: setup_bench_db creates a named database which adds metadata to the
-    // main database, so actual item count is n + 1
-    let actual_items = n + 1;
+    let n = 1000;
+    let (_dir, env) = setup_bench_env(n);
+    // Open the db handle once — dbi is stable for the environment lifetime.
+    let db = {
+        let txn = create_ro_sync(&env);
+        txn.open_db(None).unwrap()
+    };
     c.bench_function("cursor::traverse::iter", |b| {
         b.iter(|| {
+            let txn = create_ro_sync(&env);
             let (i, count) = txn
                 .cursor(db)
                 .unwrap()
@@ -70,13 +70,13 @@ fn bench_get_seq_cursor(c: &mut Criterion) {
                 .fold((0, 0), |(i, count), (key, val)| (i + *key + *val, count + 1));
 
             black_box(i);
-            assert_eq!(count, actual_items);
+            assert_eq!(count, n);
         })
     });
 }
 
 fn bench_get_seq_for_loop(c: &mut Criterion) {
-    let n = 100;
+    let n = 1000;
     let (_dir, env) = setup_bench_db(n);
     let txn = create_ro_sync(&env);
     let db = txn.open_db(None).unwrap();
@@ -103,7 +103,7 @@ fn bench_get_seq_for_loop(c: &mut Criterion) {
 
 /// Benchmark of iterator sequential read performance (single-thread).
 fn bench_get_seq_iter_single_thread(c: &mut Criterion) {
-    let n = 100;
+    let n = 1000;
     let (_dir, env) = setup_bench_db(n);
     let txn = create_ro_unsync(&env);
     let db = txn.open_db(None).unwrap();
@@ -146,17 +146,17 @@ fn bench_get_seq_iter_single_thread(c: &mut Criterion) {
     });
 }
 
-/// Benchmark of cursor sequential read performance (single-thread).
 fn bench_get_seq_cursor_single_thread(c: &mut Criterion) {
-    let n = 100;
-    let (_dir, env) = setup_bench_db(n);
-    let txn = create_ro_unsync(&env);
-    let db = txn.open_db(None).unwrap();
-    // Note: setup_bench_db creates a named database which adds metadata to the
-    // main database, so actual item count is n + 1
-    let actual_items = n + 1;
+    let n = 1000;
+    let (_dir, env) = setup_bench_env(n);
+    // Open the db handle once — dbi is stable for the environment lifetime.
+    let db = {
+        let txn = create_ro_unsync(&env);
+        txn.open_db(None).unwrap()
+    };
     c.bench_function("cursor::traverse::iter::single_thread", |b| {
         b.iter(|| {
+            let txn = create_ro_unsync(&env);
             let (i, count) = txn
                 .cursor(db)
                 .unwrap()
@@ -165,13 +165,13 @@ fn bench_get_seq_cursor_single_thread(c: &mut Criterion) {
                 .fold((0, 0), |(i, count), (key, val)| (i + *key + *val, count + 1));
 
             black_box(i);
-            assert_eq!(count, actual_items);
+            assert_eq!(count, n);
         })
     });
 }
 
 fn bench_get_seq_for_loop_single_thread(c: &mut Criterion) {
-    let n = 100;
+    let n = 1000;
     let (_dir, env) = setup_bench_db(n);
     let txn = create_ro_unsync(&env);
     let db = txn.open_db(None).unwrap();
@@ -198,7 +198,7 @@ fn bench_get_seq_for_loop_single_thread(c: &mut Criterion) {
 
 /// Benchmark of raw MDBX sequential read performance (control).
 fn bench_get_seq_raw(c: &mut Criterion) {
-    let n = 100;
+    let n = 1000;
     let (_dir, env) = setup_bench_db(n);
 
     let mut key = MDBX_val { iov_len: 0, iov_base: ptr::null_mut() };
@@ -245,7 +245,7 @@ fn bench_get_seq_raw(c: &mut Criterion) {
 
 criterion_group! {
     name = benches;
-    config = Criterion::default();
+    config = quick_config();
     targets = bench_get_seq_iter, bench_get_seq_cursor, bench_get_seq_for_loop, bench_get_seq_raw,
               bench_get_seq_iter_single_thread, bench_get_seq_cursor_single_thread, bench_get_seq_for_loop_single_thread
 }

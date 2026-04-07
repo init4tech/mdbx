@@ -30,15 +30,8 @@
 //! # Dirty Page Handling
 //!
 //! In read-write transactions, database pages may be "dirty" (modified but
-//! not yet committed). The behavior of `Cow<[u8]>` depends on the
-//! `return-borrowed` feature:
-//!
-//! - **With `return-borrowed`**: Always returns `Cow::Borrowed`, even for
-//!   dirty pages. This is faster but the data may change if the transaction
-//!   modifies it later.
-//!
-//! - **Without `return-borrowed`** (default): Dirty pages are copied to
-//!   `Cow::Owned`. This is safer but allocates more.
+//! not yet committed). When using `Cow<[u8]>`, dirty pages are copied to
+//! `Cow::Owned` while clean pages are borrowed as `Cow::Borrowed`.
 //!
 //! # Example
 //!

@@ -46,10 +46,30 @@ DUP_SORT/DUP_FIXED methods validate flags at runtime:
 
 - `require_dup_sort()` returns `MdbxError::RequiresDupSort`
 - `require_dup_fixed()` returns `MdbxError::RequiresDupFixed`
-- `debug_assert_integer_key()` validates key length (4 or 8 bytes) in debug builds
 
 Methods requiring DUP_SORT: `first_dup`, `last_dup`, `next_dup`, `prev_dup`, `get_both`, `get_both_range`
 Methods requiring DUP_FIXED: `get_multiple`, `next_multiple`, `prev_multiple`
+
+### Input Validation Model
+
+MDBX's C layer aborts the process (via `cASSERT`) on certain constraint
+violations — notably INTEGER_KEY size mismatches and oversized keys/values.
+These aborts cannot be caught.
+
+Our validation model (in `src/tx/assertions.rs`):
+
+- **Debug builds:** `debug_assert` checks catch constraint violations in
+  Rust before they reach FFI. This includes key/value size limits, INTEGER_KEY
+  length (must be 4 or 8 bytes), INTEGER_DUP length, and append ordering.
+- **Release builds:** No checks are performed. Invalid input passes through
+  to MDBX, which may abort the process.
+- **Benchmarks and fuzz targets:** MUST constrain inputs to valid ranges.
+  Do not feed arbitrary-length keys to INTEGER_KEY databases or oversized
+  keys/values to any database. The fuzz/bench harness is responsible for
+  generating valid input, not the library.
+
+This is intentional. The library trusts callers in release mode for
+performance. The debug assertions exist to catch bugs during development.
 
 ### Error Types
 
@@ -68,6 +88,7 @@ src/
   codec.rs         - TableObject trait
   tx/
     mod.rs
+    assertions.rs  - Debug assertions for key/value constraints
     cursor.rs      - Cursor impl
     database.rs    - Database struct
     sync.rs        - Transaction impl
@@ -76,14 +97,29 @@ src/
   sys/
     environment.rs - Environment impl
 tests/
-  cursor.rs        - Cursor tests
-  transaction.rs   - Transaction tests
-  environment.rs   - Environment tests
+  cursor.rs            - Cursor tests
+  transaction.rs       - Transaction tests
+  environment.rs       - Environment tests
+  proptest_kv.rs       - Property tests: key/value operations
+  proptest_cursor.rs   - Property tests: cursor operations
+  proptest_dupsort.rs  - Property tests: DUPSORT operations
+  proptest_dupfixed.rs - Property tests: DUPFIXED operations
+  proptest_iter.rs     - Property tests: iterator operations
+  proptest_nested.rs   - Property tests: nested transactions
 benches/
-  cursor.rs        - Cursor benchmarks
+  cursor.rs        - Cursor read benchmarks
+  cursor_write.rs  - Cursor write benchmarks
   transaction.rs   - Transaction benchmarks
   db_open.rs       - Database open benchmarks
+  reserve.rs       - Reserve vs put benchmarks
+  nested_txn.rs    - Nested transaction benchmarks
+  concurrent.rs    - Concurrency benchmarks
+  scaling.rs       - Scaling benchmarks
+  deletion.rs      - Deletion benchmarks
+  iter.rs          - Iterator benchmarks
   utils.rs         - Benchmark utilities
+fuzz/
+  fuzz_targets/    - cargo-fuzz targets (FFI/unsafe boundary hardening)
 ```
 
 ## Testing
@@ -109,3 +145,4 @@ This SHOULD be run alongside local tests and linting, especially for changes tha
 - Modify build configuration
 - Add new dependencies
 - Change platform-specific code
+

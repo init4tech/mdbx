@@ -134,7 +134,7 @@ fn bench_open_db_no_cache_named(c: &mut Criterion) {
 
 criterion_group! {
     name = db_open;
-    config = Criterion::default();
+    config = quick_config();
     targets =
         bench_dbi_flags_ex_only,
         bench_dbi_open_only,

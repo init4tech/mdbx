@@ -23,7 +23,7 @@ use std::{
     sync::Arc,
 };
 
-/// Cache trait for transaction-local database handles.
+/// Cache trait for transaction-local database handles and cursors.
 ///
 /// This is used by the [`SyncKind`] trait to define the cache type for each
 /// transaction kind.
@@ -38,6 +38,16 @@ pub trait Cache: Clone + Default + std::fmt::Debug {
 
     /// Remove a database entry from the cache by dbi.
     fn remove_dbi(&self, dbi: ffi::MDBX_dbi);
+
+    /// Take a cached cursor for the given DBI, if one exists.
+    fn take_cursor(&self, dbi: ffi::MDBX_dbi) -> Option<*mut ffi::MDBX_cursor>;
+
+    /// Return a cursor to the cache for later reuse.
+    fn return_cursor(&self, dbi: ffi::MDBX_dbi, cursor: *mut ffi::MDBX_cursor);
+
+    /// Drain all cached cursors, returning their raw pointers.
+    /// The caller is responsible for closing them via FFI.
+    fn drain_cursors(&self) -> SmallVec<[*mut ffi::MDBX_cursor; 8]>;
 }
 
 /// Cached database entry.
@@ -73,37 +83,68 @@ impl From<CachedDb> for Database {
     }
 }
 
-/// Simple cache container for database handles.
+/// Simple cache container for database handles and cursor pointers.
 ///
 /// Uses inline storage for the common case (most apps use < 16 databases).
-#[derive(Debug, Default, Clone)]
-#[repr(transparent)]
-pub struct DbCache(SmallVec<[CachedDb; 16]>);
+#[derive(Debug)]
+pub struct DbCache {
+    dbs: SmallVec<[CachedDb; 16]>,
+    cursors: SmallVec<[(ffi::MDBX_dbi, *mut ffi::MDBX_cursor); 8]>,
+}
+
+// SAFETY: DbCache contains `*mut ffi::MDBX_cursor` which is `!Send + !Sync`.
+// These are raw MDBX cursor pointers bound to a transaction, not a thread.
+// `Cursor` itself is already `Send + Sync` (see cursor.rs), so caching the
+// same pointers here introduces no new unsoundness. All access to these
+// pointers is mediated by `RefCell` (unsync path) or `RwLock` (sync path),
+// ensuring no concurrent mutation.
+unsafe impl Send for DbCache {}
+unsafe impl Sync for DbCache {}
+
+impl Default for DbCache {
+    fn default() -> Self {
+        Self { dbs: SmallVec::new(), cursors: SmallVec::new() }
+    }
+}
+
+impl Clone for DbCache {
+    fn clone(&self) -> Self {
+        Self { dbs: self.dbs.clone(), cursors: SmallVec::new() }
+    }
+}
 
 impl DbCache {
     /// Read a database entry from the cache.
     fn read_db(&self, name_hash: u64) -> Option<Database> {
-        for entry in self.0.iter() {
-            if entry.name_hash == name_hash {
-                return Some(entry.db);
-            }
-        }
-        None
+        self.dbs.iter().find(|e| e.name_hash == name_hash).map(|e| e.db)
     }
 
     /// Write a database entry to the cache.
     fn write_db(&mut self, db: CachedDb) {
-        for entry in self.0.iter() {
-            if entry.name_hash == db.name_hash {
-                return; // Another thread beat us
-            }
+        if self.dbs.iter().any(|e| e.name_hash == db.name_hash) {
+            return;
         }
-        self.0.push(db);
+        self.dbs.push(db);
     }
 
     /// Remove a database entry from the cache by dbi.
     fn remove_dbi(&mut self, dbi: ffi::MDBX_dbi) {
-        self.0.retain(|entry| entry.db.dbi() != dbi);
+        self.dbs.retain(|entry| entry.db.dbi() != dbi);
+    }
+
+    /// Take a cached cursor for the given DBI, if one exists.
+    fn take_cursor(&mut self, dbi: ffi::MDBX_dbi) -> Option<*mut ffi::MDBX_cursor> {
+        self.cursors.iter().position(|(d, _)| *d == dbi).map(|i| self.cursors.swap_remove(i).1)
+    }
+
+    /// Return a cursor to the cache for later reuse.
+    fn return_cursor(&mut self, dbi: ffi::MDBX_dbi, cursor: *mut ffi::MDBX_cursor) {
+        self.cursors.push((dbi, cursor));
+    }
+
+    /// Drain all cached cursors, returning their raw pointers.
+    fn drain_cursors(&mut self) -> SmallVec<[*mut ffi::MDBX_cursor; 8]> {
+        self.cursors.drain(..).map(|(_, c)| c).collect()
     }
 }
 
@@ -135,20 +176,29 @@ impl SharedCache {
 impl Cache for SharedCache {
     /// Read a database entry from the cache.
     fn read_db(&self, name_hash: u64) -> Option<Database> {
-        let cache = self.read();
-        cache.read_db(name_hash)
+        self.read().read_db(name_hash)
     }
 
     /// Write a database entry to the cache.
     fn write_db(&self, db: CachedDb) {
-        let mut cache = self.write();
-        cache.write_db(db);
+        self.write().write_db(db);
     }
 
     /// Remove a database entry from the cache by dbi.
     fn remove_dbi(&self, dbi: ffi::MDBX_dbi) {
-        let mut cache = self.write();
-        cache.remove_dbi(dbi);
+        self.write().remove_dbi(dbi);
+    }
+
+    fn take_cursor(&self, dbi: ffi::MDBX_dbi) -> Option<*mut ffi::MDBX_cursor> {
+        self.write().take_cursor(dbi)
+    }
+
+    fn return_cursor(&self, dbi: ffi::MDBX_dbi, cursor: *mut ffi::MDBX_cursor) {
+        self.write().return_cursor(dbi, cursor);
+    }
+
+    fn drain_cursors(&self) -> SmallVec<[*mut ffi::MDBX_cursor; 8]> {
+        self.write().drain_cursors()
     }
 }
 
@@ -161,19 +211,28 @@ impl Default for SharedCache {
 impl Cache for RefCell<DbCache> {
     /// Read a database entry from the cache.
     fn read_db(&self, name_hash: u64) -> Option<Database> {
-        let cache = self.borrow();
-        cache.read_db(name_hash)
+        self.borrow().read_db(name_hash)
     }
 
     /// Write a database entry to the cache.
     fn write_db(&self, db: CachedDb) {
-        let mut cache = self.borrow_mut();
-        cache.write_db(db);
+        self.borrow_mut().write_db(db);
     }
 
     /// Remove a database entry from the cache by dbi.
     fn remove_dbi(&self, dbi: ffi::MDBX_dbi) {
-        let mut cache = self.borrow_mut();
-        cache.remove_dbi(dbi);
+        self.borrow_mut().remove_dbi(dbi);
+    }
+
+    fn take_cursor(&self, dbi: ffi::MDBX_dbi) -> Option<*mut ffi::MDBX_cursor> {
+        self.borrow_mut().take_cursor(dbi)
+    }
+
+    fn return_cursor(&self, dbi: ffi::MDBX_dbi, cursor: *mut ffi::MDBX_cursor) {
+        self.borrow_mut().return_cursor(dbi, cursor);
+    }
+
+    fn drain_cursors(&self) -> SmallVec<[*mut ffi::MDBX_cursor; 8]> {
+        self.borrow_mut().drain_cursors()
     }
 }

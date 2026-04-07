@@ -185,6 +185,12 @@ pub enum MdbxError {
     /// Operation requires DUP_FIXED flag on database.
     #[error("operation requires DUP_FIXED flag on database")]
     RequiresDupFixed,
+    /// Failed to open multiple read transactions on the same MVCC snapshot.
+    ///
+    /// Concurrent write pressure prevented acquiring a consistent set of
+    /// read transactions within the retry limit.
+    #[error("failed to acquire consistent MVCC snapshot across multiple read transactions")]
+    SnapshotDivergence,
 }
 
 impl MdbxError {
@@ -263,6 +269,7 @@ impl MdbxError {
             Self::BotchedTransaction => -96001,
             Self::RequiresDupSort => -96002,
             Self::RequiresDupFixed => -96003,
+            Self::SnapshotDivergence => -96004,
             Self::Permission => ffi::MDBX_EPERM,
             Self::Other(err_code) => *err_code,
         }

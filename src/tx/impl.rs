@@ -47,7 +47,7 @@ impl fmt::Debug for TxMeta {
 ///
 /// [`TxSync`]: crate::tx::aliases::TxSync
 /// [`TxUnsync`]: crate::tx::aliases::TxUnsync
-pub struct Tx<K: TransactionKind, U = <K as SyncKind>::Access> {
+pub struct Tx<K: TransactionKind, U: TxPtrAccess = <K as SyncKind>::Access> {
     txn: U,
 
     cache: K::Cache,
@@ -55,7 +55,7 @@ pub struct Tx<K: TransactionKind, U = <K as SyncKind>::Access> {
     meta: TxMeta,
 }
 
-impl<K: TransactionKind, U> fmt::Debug for Tx<K, U> {
+impl<K: TransactionKind, U: TxPtrAccess> fmt::Debug for Tx<K, U> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Tx").finish_non_exhaustive()
     }
@@ -238,11 +238,33 @@ where
 
     /// Opens a cursor on the given database.
     ///
-    /// Multiple cursors can be open simultaneously on different databases
-    /// within the same transaction. The cursor borrows the transaction's
-    /// inner access type, allowing concurrent cursor operations.
+    /// Cursors are transparently cached: dropped cursors return their
+    /// raw pointer to the cache, and subsequent calls reuse them without
+    /// a new `mdbx_cursor_open` allocation.
     pub fn cursor(&self, db: Database) -> MdbxResult<Cursor<'_, K>> {
-        Cursor::new(&self.txn, db)
+        if let Some(raw) = self.cache.take_cursor(db.dbi()) {
+            Ok(Cursor::from_raw(&self.txn, &self.cache, raw, db))
+        } else {
+            Cursor::new(&self.txn, &self.cache, db)
+        }
+    }
+
+    /// Drains the cursor cache and closes all cached cursor pointers.
+    ///
+    /// Must be called before commit or abort to ensure all cursors are
+    /// closed while the transaction is still valid.
+    fn drain_cached_cursors(&self) {
+        let cursors = self.cache.drain_cursors();
+        if cursors.is_empty() {
+            return;
+        }
+        self.with_txn_ptr(|_| {
+            for cursor in cursors {
+                // SAFETY: cursor pointers are valid — they were returned
+                // by Cursor::drop during the lifetime of this transaction.
+                unsafe { ffi::mdbx_cursor_close(cursor) };
+            }
+        });
     }
 }
 
@@ -489,6 +511,8 @@ where
     ///
     /// SAFETY: latency pointer must be valid for the duration of the commit.
     fn commit_inner(self, latency: *mut MDBX_commit_latency) -> MdbxResult<()> {
+        self.drain_cached_cursors();
+
         let was_aborted = self.with_txn_ptr(|txn| {
             if K::IS_READ_ONLY {
                 mdbx_result(unsafe { ffi::mdbx_txn_commit_ex(txn, latency) })
@@ -541,6 +565,8 @@ where
         // Self is dropped at end of function, so RwTxPtr::drop will be within
         // span scope.
         let _guard = self.meta.span.clone().entered();
+
+        self.drain_cached_cursors();
 
         // SAFETY: txn_ptr is valid from with_txn_ptr.
         let was_aborted =
@@ -649,6 +675,27 @@ where
                 Ok(Self::from_ptr_and_env(nested_txn, self.env().clone()))
             }
         })
+    }
+}
+
+impl<K, U> Drop for Tx<K, U>
+where
+    K: TransactionKind,
+    U: TxPtrAccess,
+{
+    fn drop(&mut self) {
+        let cursors = self.cache.drain_cursors();
+        if cursors.is_empty() {
+            return;
+        }
+        self.txn.with_txn_ptr(|_| {
+            for cursor in cursors {
+                // SAFETY: cursor pointers were returned by Cursor::drop
+                // during the lifetime of this transaction, which is still
+                // alive (we are in Tx::drop, before txn ptr is dropped).
+                unsafe { ffi::mdbx_cursor_close(cursor) };
+            }
+        });
     }
 }
 

@@ -60,7 +60,7 @@ where
     /// Wraps an existing raw cursor pointer with cache support.
     ///
     /// The cursor must already be bound to the correct transaction and DBI.
-    pub(crate) fn from_raw(
+    pub(crate) const fn from_raw(
         access: &'tx K::Access,
         cache: &'tx K::Cache,
         cursor: *mut ffi::MDBX_cursor,

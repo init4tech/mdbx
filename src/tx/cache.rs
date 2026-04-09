@@ -48,6 +48,10 @@ pub trait Cache: Clone + Default + std::fmt::Debug {
     /// Drain all cached cursors, returning their raw pointers.
     /// The caller is responsible for closing them via FFI.
     fn drain_cursors(&self) -> SmallVec<[*mut ffi::MDBX_cursor; 8]>;
+
+    /// Drain cached cursors for a specific DBI, returning their raw pointers.
+    /// The caller is responsible for closing them via FFI.
+    fn drain_cursors_for_dbi(&self, dbi: ffi::MDBX_dbi) -> SmallVec<[*mut ffi::MDBX_cursor; 8]>;
 }
 
 /// Cached database entry.
@@ -146,6 +150,23 @@ impl DbCache {
     fn drain_cursors(&mut self) -> SmallVec<[*mut ffi::MDBX_cursor; 8]> {
         self.cursors.drain(..).map(|(_, c)| c).collect()
     }
+
+    /// Drain cached cursors for a specific DBI, returning their raw pointers.
+    fn drain_cursors_for_dbi(
+        &mut self,
+        dbi: ffi::MDBX_dbi,
+    ) -> SmallVec<[*mut ffi::MDBX_cursor; 8]> {
+        let mut drained = SmallVec::new();
+        self.cursors.retain(|(d, c)| {
+            if *d == dbi {
+                drained.push(*c);
+                false
+            } else {
+                true
+            }
+        });
+        drained
+    }
 }
 
 /// Simple cache container for database handles.
@@ -200,6 +221,10 @@ impl Cache for SharedCache {
     fn drain_cursors(&self) -> SmallVec<[*mut ffi::MDBX_cursor; 8]> {
         self.write().drain_cursors()
     }
+
+    fn drain_cursors_for_dbi(&self, dbi: ffi::MDBX_dbi) -> SmallVec<[*mut ffi::MDBX_cursor; 8]> {
+        self.write().drain_cursors_for_dbi(dbi)
+    }
 }
 
 impl Default for SharedCache {
@@ -234,5 +259,9 @@ impl Cache for RefCell<DbCache> {
 
     fn drain_cursors(&self) -> SmallVec<[*mut ffi::MDBX_cursor; 8]> {
         self.borrow_mut().drain_cursors()
+    }
+
+    fn drain_cursors_for_dbi(&self, dbi: ffi::MDBX_dbi) -> SmallVec<[*mut ffi::MDBX_cursor; 8]> {
+        self.borrow_mut().drain_cursors_for_dbi(dbi)
     }
 }

@@ -224,12 +224,26 @@ where
 
     /// Closes the database handle.
     ///
+    /// Any cached cursor pointers for this DBI are drained and closed
+    /// before the handle is closed.
+    ///
     /// # Safety
     ///
     /// This will invalidate data cached in [`Database`] instances with the
     /// DBI, and may result in bad behavior when using those instances after
     /// calling this function.
     pub unsafe fn close_db(&self, dbi: ffi::MDBX_dbi) -> MdbxResult<()> {
+        // Drain and close any cached cursors for this DBI before closing it.
+        let stale = self.cache.drain_cursors_for_dbi(dbi);
+        if !stale.is_empty() {
+            self.with_txn_ptr(|_| {
+                for cursor in stale {
+                    // SAFETY: cursor pointers are valid — returned by
+                    // Cursor::drop during the lifetime of this transaction.
+                    unsafe { ffi::mdbx_cursor_close(cursor) };
+                }
+            });
+        }
         // SAFETY: Caller ensures no other references exist.
         unsafe { ops::close_db_raw(self.meta.env.env_ptr(), dbi) }?;
         self.cache.remove_dbi(dbi);
@@ -481,12 +495,26 @@ impl<K: TransactionKind + WriteMarker> Tx<K> {
 
     /// Drops the database from the environment.
     ///
+    /// Any cached cursor pointers for this DBI are drained and closed
+    /// before the database is dropped.
+    ///
     /// # Safety
     ///
     /// Caller must ensure no [`Cursor`] or other references to the database
     /// exist. [`Database`] instances with the DBI will be invalidated, and
     /// use after calling this function may result in bad behavior.
     pub unsafe fn drop_db(&self, db: Database) -> MdbxResult<()> {
+        // Drain and close any cached cursors for this DBI before dropping it.
+        let stale = self.cache.drain_cursors_for_dbi(db.dbi());
+        if !stale.is_empty() {
+            self.with_txn_ptr(|_| {
+                for cursor in stale {
+                    // SAFETY: cursor pointers are valid — returned by
+                    // Cursor::drop during the lifetime of this transaction.
+                    unsafe { ffi::mdbx_cursor_close(cursor) };
+                }
+            });
+        }
         self.with_txn_ptr(|txn| {
             // SAFETY: txn is a valid RW transaction pointer, caller ensures
             // no other references to dbi exist.

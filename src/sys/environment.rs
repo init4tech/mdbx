@@ -18,6 +18,11 @@ use std::{
     time::Duration,
 };
 
+/// Maximum retry count for the optimistic snapshot-matching loop in
+/// [`Environment::begin_ro_sync_multi`] and
+/// [`Environment::begin_ro_unsync_multi`].
+const MAX_MULTI_RETRIES: usize = 16;
+
 /// An environment supports multiple databases, all residing in the same shared-memory map.
 ///
 /// Accessing the environment is thread-safe.
@@ -166,10 +171,6 @@ impl Environment {
         self.begin_ro_multi(n, Self::begin_ro_unsync, |tx| tx.id())
     }
 
-    /// Maximum retry count for the optimistic snapshot-matching loop in
-    /// [`Self::begin_ro_sync_multi`] and [`Self::begin_ro_unsync_multi`].
-    const MAX_MULTI_RETRIES: usize = 16;
-
     /// Open `n` read-only transactions guaranteed to share the same MVCC
     /// snapshot.
     ///
@@ -184,13 +185,14 @@ impl Environment {
         begin: fn(&Self) -> MdbxResult<T>,
         id: fn(&T) -> MdbxResult<u64>,
     ) -> MdbxResult<Vec<T>> {
-        if n <= 1 {
-            return (n == 1)
-                .then(|| begin(self))
-                .map_or_else(|| Ok(Vec::new()), |r| r.map(|t| vec![t]));
+        if n == 0 {
+            return Ok(Vec::new());
+        }
+        if n == 1 {
+            return begin(self).map(|t| vec![t]);
         }
 
-        for _ in 0..Self::MAX_MULTI_RETRIES {
+        for _ in 0..MAX_MULTI_RETRIES {
             let txns: Vec<T> = (0..n).map(|_| begin(self)).collect::<MdbxResult<_>>()?;
 
             let first_id = id(&txns[0])?;

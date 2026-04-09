@@ -1857,6 +1857,98 @@ fn test_cursor_cache_repeated_cycles_v2() {
     test_cursor_cache_repeated_cycles_impl(V2Factory::begin_rw, V2Factory::begin_ro);
 }
 
+fn test_cursor_cache_reuse_ro_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
+    let dir = tempdir().unwrap();
+    let env = Environment::builder().open(dir.path()).unwrap();
+
+    // Populate via RW, then commit
+    let txn = begin_rw(&env).unwrap();
+    let db = txn.create_db(None, DatabaseFlags::empty()).unwrap();
+    txn.put(db, b"key1", b"val1", WriteFlags::empty()).unwrap();
+    txn.put(db, b"key2", b"val2", WriteFlags::empty()).unwrap();
+    txn.commit().unwrap();
+
+    // Test cursor caching in RO txn
+    let txn = begin_ro(&env).unwrap();
+    let db = txn.open_db(None).unwrap();
+
+    // First cursor: open, use, drop (returns to cache)
+    {
+        let mut cursor = txn.cursor(db).unwrap();
+        let (k, v) = cursor.first::<Vec<u8>, Vec<u8>>().unwrap().unwrap();
+        assert_eq!(&k, b"key1");
+        assert_eq!(&v, b"val1");
+    }
+
+    // Second cursor: should reuse cached pointer
+    {
+        let mut cursor = txn.cursor(db).unwrap();
+        let (k, v) = cursor.first::<Vec<u8>, Vec<u8>>().unwrap().unwrap();
+        assert_eq!(&k, b"key1");
+        assert_eq!(&v, b"val1");
+
+        let (k, v) = cursor.next::<Vec<u8>, Vec<u8>>().unwrap().unwrap();
+        assert_eq!(&k, b"key2");
+        assert_eq!(&v, b"val2");
+    }
+
+    txn.commit().unwrap();
+}
+
+#[test]
+fn test_cursor_cache_reuse_ro_v1() {
+    test_cursor_cache_reuse_ro_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_cursor_cache_reuse_ro_v2() {
+    test_cursor_cache_reuse_ro_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+fn test_cursor_cache_repeated_cycles_ro_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
+    let dir = tempdir().unwrap();
+    let env = Environment::builder().open(dir.path()).unwrap();
+
+    let txn = begin_rw(&env).unwrap();
+    let db = txn.create_db(None, DatabaseFlags::empty()).unwrap();
+    txn.put(db, b"key", b"val", WriteFlags::empty()).unwrap();
+    txn.commit().unwrap();
+
+    let txn = begin_ro(&env).unwrap();
+    let db = txn.open_db(None).unwrap();
+
+    for _ in 0..100 {
+        let mut cursor = txn.cursor(db).unwrap();
+        let (k, v) = cursor.first::<Vec<u8>, Vec<u8>>().unwrap().unwrap();
+        assert_eq!(&k, b"key");
+        assert_eq!(&v, b"val");
+    }
+
+    txn.commit().unwrap();
+}
+
+#[test]
+fn test_cursor_cache_repeated_cycles_ro_v1() {
+    test_cursor_cache_repeated_cycles_ro_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_cursor_cache_repeated_cycles_ro_v2() {
+    test_cursor_cache_repeated_cycles_ro_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
 // Release-build test: verify runtime error instead of panic
 #[cfg(not(debug_assertions))]
 #[test]

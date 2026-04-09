@@ -274,6 +274,8 @@ where
     ///
     /// Must be called before commit or abort to ensure all cursors are
     /// closed while the transaction is still valid.
+    ///
+    /// NB: keep in sync with the inlined logic in `Tx::Drop`.
     fn drain_cached_cursors(&self) {
         let cursors = self.cache.drain_cursors();
         if cursors.is_empty() {
@@ -716,6 +718,7 @@ where
 // NOTE: This impl is on Tx<K, U> with free U, not Tx<K> (where U = K::Access).
 // Rust requires Drop bounds to match the struct definition exactly, so we
 // cannot call `self.drain_cached_cursors()` here (it lives on `impl<K> Tx<K>`).
+// NB: keep in sync with `drain_cached_cursors`.
 // The drain-and-close logic is inlined instead.
 impl<K, U> Drop for Tx<K, U>
 where

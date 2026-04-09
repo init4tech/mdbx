@@ -1949,6 +1949,57 @@ fn test_cursor_cache_repeated_cycles_ro_v2() {
     test_cursor_cache_repeated_cycles_ro_impl(V2Factory::begin_rw, V2Factory::begin_ro);
 }
 
+fn test_cursor_cache_reuse_across_writes_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    _begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
+    let dir = tempdir().unwrap();
+    let env = Environment::builder().open(dir.path()).unwrap();
+
+    let txn = begin_rw(&env).unwrap();
+    let db = txn.create_db(None, DatabaseFlags::empty()).unwrap();
+    txn.put(db, b"key1", b"val1", WriteFlags::empty()).unwrap();
+
+    // cursor -> read -> drop (returns to cache)
+    {
+        let mut cursor = txn.cursor(db).unwrap();
+        let (k, v) = cursor.first::<Vec<u8>, Vec<u8>>().unwrap().unwrap();
+        assert_eq!(&k, b"key1");
+        assert_eq!(&v, b"val1");
+    }
+
+    // Write new data (B-tree COW)
+    txn.put(db, b"key2", b"val2", WriteFlags::empty()).unwrap();
+
+    // cursor (from cache) -> read -> should see updated data
+    {
+        let mut cursor = txn.cursor(db).unwrap();
+        let (k, v) = cursor.last::<Vec<u8>, Vec<u8>>().unwrap().unwrap();
+        assert_eq!(&k, b"key2");
+        assert_eq!(&v, b"val2");
+
+        // Verify both entries visible
+        let (k, v) = cursor.first::<Vec<u8>, Vec<u8>>().unwrap().unwrap();
+        assert_eq!(&k, b"key1");
+        assert_eq!(&v, b"val1");
+    }
+
+    txn.commit().unwrap();
+}
+
+#[test]
+fn test_cursor_cache_reuse_across_writes_v1() {
+    test_cursor_cache_reuse_across_writes_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_cursor_cache_reuse_across_writes_v2() {
+    test_cursor_cache_reuse_across_writes_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
 // Release-build test: verify runtime error instead of panic
 #[cfg(not(debug_assertions))]
 #[test]

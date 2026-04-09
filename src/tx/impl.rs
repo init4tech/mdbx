@@ -254,10 +254,17 @@ where
     ///
     /// Cursors are transparently cached: dropped cursors return their
     /// raw pointer to the cache, and subsequent calls reuse them without
-    /// a new `mdbx_cursor_open` allocation.
+    /// a new `mdbx_cursor_open` allocation. Cached cursors are renewed
+    /// via `mdbx_cursor_renew` to reset their position.
     pub fn cursor(&self, db: Database) -> MdbxResult<Cursor<'_, K>> {
         if let Some(raw) = self.cache.take_cursor(db.dbi()) {
-            Ok(Cursor::from_raw(&self.txn, &self.cache, raw, db))
+            self.with_txn_ptr(|txn_ptr| {
+                // SAFETY: txn_ptr is valid from with_txn_ptr, raw is a
+                // valid cursor pointer returned by a prior Cursor::drop.
+                let rc = unsafe { ffi::mdbx_cursor_renew(txn_ptr, raw) };
+                mdbx_result(rc)?;
+                Ok(Cursor::from_raw(&self.txn, &self.cache, raw, db))
+            })
         } else {
             Cursor::new(&self.txn, &self.cache, db)
         }

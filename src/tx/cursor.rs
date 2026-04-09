@@ -76,18 +76,20 @@ where
             let cursor = ffi::mdbx_cursor_create(ptr::null_mut());
 
             let res = ffi::mdbx_cursor_copy(other.cursor(), cursor);
+            if let Err(e) = mdbx_result(res) {
+                // Close directly — do NOT construct Self, as Drop would
+                // push this unbound cursor into the cache.
+                ffi::mdbx_cursor_close(cursor);
+                return Err(e);
+            }
 
-            let s = Self {
+            Ok(Self {
                 access: other.access,
                 cache: other.cache,
                 cursor,
                 db: other.db,
                 _kind: PhantomData,
-            };
-
-            mdbx_result(res)?;
-
-            Ok(s)
+            })
         }
     }
 

@@ -135,7 +135,10 @@ where
     /// Returns the transaction id.
     #[inline(always)]
     pub fn id(&self) -> MdbxResult<u64> {
-        self.with_txn_ptr(|txn_ptr| Ok(unsafe { ffi::mdbx_txn_id(txn_ptr) }))
+        self.with_txn_ptr(|txn_ptr| {
+            let id = unsafe { ffi::mdbx_txn_id(txn_ptr) };
+            if id == 0 { Err(MdbxError::BadTxn) } else { Ok(id) }
+        })
     }
 
     /// Gets an item from a database.

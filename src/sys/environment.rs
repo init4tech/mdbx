@@ -195,7 +195,8 @@ impl Environment {
         for _ in 0..MAX_MULTI_RETRIES {
             let txns: Vec<T> = (0..n).map(|_| begin(self)).collect::<MdbxResult<_>>()?;
 
-            if txns.windows(2).all(|w| id(&w[0]) == id(&w[1])) {
+            let first = id(&txns[0])?;
+            if txns[1..].iter().all(|t| id(t) == Ok(first)) {
                 return Ok(txns);
             }
         }

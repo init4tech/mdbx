@@ -18,6 +18,11 @@ use std::{
     time::Duration,
 };
 
+/// Maximum retry count for the optimistic snapshot-matching loop in
+/// [`Environment::begin_ro_sync_multi`] and
+/// [`Environment::begin_ro_unsync_multi`].
+const MAX_MULTI_RETRIES: usize = 16;
+
 /// An environment supports multiple databases, all residing in the same shared-memory map.
 ///
 /// Accessing the environment is thread-safe.
@@ -114,6 +119,89 @@ impl Environment {
     /// version, but cannot be sent or shared between threads.
     pub fn begin_rw_unsync(&self) -> MdbxResult<RwTxUnsync> {
         RwTxUnsync::begin(self.clone())
+    }
+
+    /// Open `n` read-only synchronized transactions guaranteed to share the
+    /// same MVCC snapshot.
+    ///
+    /// This enables safe parallel iteration over large tables using multiple
+    /// cursors on separate threads without risking snapshot divergence.
+    ///
+    /// Uses an optimistic open-and-verify loop: transactions are opened
+    /// sequentially, then their snapshot IDs are compared. If a writer
+    /// commits between opens causing divergence, all transactions are
+    /// dropped and the process retries. Returns
+    /// [`MdbxError::SnapshotDivergence`] if retries are exhausted.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use signet_libmdbx::{Environment, Geometry, MdbxResult};
+    /// # use std::path::Path;
+    /// # fn main() -> MdbxResult<()> {
+    /// let env = Environment::builder()
+    ///     .set_geometry(Geometry {
+    ///         size: Some(0..(1024 * 1024 * 1024)),
+    ///         ..Default::default()
+    ///     })
+    ///     .open(Path::new("/tmp/my_database"))?;
+    ///
+    /// // Open 4 read transactions on the same snapshot
+    /// let txns = env.begin_ro_sync_multi(4)?;
+    /// // All transactions see the same data
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn begin_ro_sync_multi(&self, n: usize) -> MdbxResult<Vec<RoTxSync>> {
+        self.begin_ro_multi(n, Self::begin_ro_sync, |tx| tx.id())
+    }
+
+    /// Open `n` read-only unsynchronized transactions guaranteed to share the
+    /// same MVCC snapshot.
+    ///
+    /// This is the `!Sync` counterpart to [`begin_ro_sync_multi`]. The
+    /// returned transactions cannot be shared between threads, but offer
+    /// ~30% lower overhead per operation.
+    ///
+    /// See [`begin_ro_sync_multi`] for details on the optimistic retry
+    /// behavior.
+    ///
+    /// [`begin_ro_sync_multi`]: Self::begin_ro_sync_multi
+    pub fn begin_ro_unsync_multi(&self, n: usize) -> MdbxResult<Vec<RoTxUnsync>> {
+        self.begin_ro_multi(n, Self::begin_ro_unsync, |tx| tx.id())
+    }
+
+    /// Open `n` read-only transactions guaranteed to share the same MVCC
+    /// snapshot.
+    ///
+    /// This is the generic implementation backing both
+    /// [`begin_ro_sync_multi`] and [`begin_ro_unsync_multi`].
+    ///
+    /// [`begin_ro_sync_multi`]: Self::begin_ro_sync_multi
+    /// [`begin_ro_unsync_multi`]: Self::begin_ro_unsync_multi
+    fn begin_ro_multi<T>(
+        &self,
+        n: usize,
+        begin: fn(&Self) -> MdbxResult<T>,
+        id: fn(&T) -> MdbxResult<u64>,
+    ) -> MdbxResult<Vec<T>> {
+        if n == 0 {
+            return Ok(Vec::new());
+        }
+        if n == 1 {
+            return begin(self).map(|t| vec![t]);
+        }
+
+        for _ in 0..MAX_MULTI_RETRIES {
+            let txns: Vec<T> = (0..n).map(|_| begin(self)).collect::<MdbxResult<_>>()?;
+
+            let first = id(&txns[0])?;
+            if txns[1..].iter().all(|t| id(t) == Ok(first)) {
+                return Ok(txns);
+            }
+        }
+
+        Err(MdbxError::SnapshotDivergence)
     }
 
     /// Returns a raw pointer to the underlying MDBX environment.

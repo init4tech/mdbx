@@ -1729,6 +1729,277 @@ fn test_put_multiple_empty_values_v2() {
     test_put_multiple_empty_values_impl(V2Factory::begin_rw, V2Factory::begin_ro);
 }
 
+fn test_cursor_cache_reuse_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    _begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
+    let dir = tempdir().unwrap();
+    let env = Environment::builder().open(dir.path()).unwrap();
+
+    let txn = begin_rw(&env).unwrap();
+    let db = txn.create_db(None, DatabaseFlags::empty()).unwrap();
+    txn.put(db, b"key1", b"val1", WriteFlags::empty()).unwrap();
+    txn.put(db, b"key2", b"val2", WriteFlags::empty()).unwrap();
+
+    // First cursor: open, use, drop (returns to cache)
+    {
+        let mut cursor = txn.cursor(db).unwrap();
+        let (k, v) = cursor.first::<Vec<u8>, Vec<u8>>().unwrap().unwrap();
+        assert_eq!(&k, b"key1");
+        assert_eq!(&v, b"val1");
+    }
+
+    // Second cursor: should reuse cached pointer
+    {
+        let mut cursor = txn.cursor(db).unwrap();
+        let (k, v) = cursor.first::<Vec<u8>, Vec<u8>>().unwrap().unwrap();
+        assert_eq!(&k, b"key1");
+        assert_eq!(&v, b"val1");
+
+        let (k, v) = cursor.next::<Vec<u8>, Vec<u8>>().unwrap().unwrap();
+        assert_eq!(&k, b"key2");
+        assert_eq!(&v, b"val2");
+    }
+
+    txn.commit().unwrap();
+}
+
+#[test]
+fn test_cursor_cache_reuse_v1() {
+    test_cursor_cache_reuse_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_cursor_cache_reuse_v2() {
+    test_cursor_cache_reuse_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+fn test_cursor_cache_multiple_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    _begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
+    let dir = tempdir().unwrap();
+    let env = Environment::builder().open(dir.path()).unwrap();
+
+    let txn = begin_rw(&env).unwrap();
+    let db = txn.create_db(None, DatabaseFlags::empty()).unwrap();
+    txn.put(db, b"a", b"1", WriteFlags::empty()).unwrap();
+    txn.put(db, b"b", b"2", WriteFlags::empty()).unwrap();
+    txn.put(db, b"c", b"3", WriteFlags::empty()).unwrap();
+
+    // Open two cursors, drop both (both return to cache)
+    {
+        let _c1 = txn.cursor(db).unwrap();
+        let _c2 = txn.cursor(db).unwrap();
+    }
+
+    // Open two again — both should reuse cached pointers
+    {
+        let mut c1 = txn.cursor(db).unwrap();
+        let mut c2 = txn.cursor(db).unwrap();
+
+        let (k1, _) = c1.first::<Vec<u8>, Vec<u8>>().unwrap().unwrap();
+        let (k2, _) = c2.last::<Vec<u8>, Vec<u8>>().unwrap().unwrap();
+        assert_eq!(&k1, b"a");
+        assert_eq!(&k2, b"c");
+    }
+
+    txn.commit().unwrap();
+}
+
+#[test]
+fn test_cursor_cache_multiple_v1() {
+    test_cursor_cache_multiple_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_cursor_cache_multiple_v2() {
+    test_cursor_cache_multiple_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+fn test_cursor_cache_repeated_cycles_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    _begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
+    let dir = tempdir().unwrap();
+    let env = Environment::builder().open(dir.path()).unwrap();
+
+    let txn = begin_rw(&env).unwrap();
+    let db = txn.create_db(None, DatabaseFlags::empty()).unwrap();
+    txn.put(db, b"key", b"val", WriteFlags::empty()).unwrap();
+
+    for _ in 0..100 {
+        let mut cursor = txn.cursor(db).unwrap();
+        let (k, v) = cursor.first::<Vec<u8>, Vec<u8>>().unwrap().unwrap();
+        assert_eq!(&k, b"key");
+        assert_eq!(&v, b"val");
+    }
+
+    txn.commit().unwrap();
+}
+
+#[test]
+fn test_cursor_cache_repeated_cycles_v1() {
+    test_cursor_cache_repeated_cycles_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_cursor_cache_repeated_cycles_v2() {
+    test_cursor_cache_repeated_cycles_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+fn test_cursor_cache_reuse_ro_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
+    let dir = tempdir().unwrap();
+    let env = Environment::builder().open(dir.path()).unwrap();
+
+    // Populate via RW, then commit
+    let txn = begin_rw(&env).unwrap();
+    let db = txn.create_db(None, DatabaseFlags::empty()).unwrap();
+    txn.put(db, b"key1", b"val1", WriteFlags::empty()).unwrap();
+    txn.put(db, b"key2", b"val2", WriteFlags::empty()).unwrap();
+    txn.commit().unwrap();
+
+    // Test cursor caching in RO txn
+    let txn = begin_ro(&env).unwrap();
+    let db = txn.open_db(None).unwrap();
+
+    // First cursor: open, use, drop (returns to cache)
+    {
+        let mut cursor = txn.cursor(db).unwrap();
+        let (k, v) = cursor.first::<Vec<u8>, Vec<u8>>().unwrap().unwrap();
+        assert_eq!(&k, b"key1");
+        assert_eq!(&v, b"val1");
+    }
+
+    // Second cursor: should reuse cached pointer
+    {
+        let mut cursor = txn.cursor(db).unwrap();
+        let (k, v) = cursor.first::<Vec<u8>, Vec<u8>>().unwrap().unwrap();
+        assert_eq!(&k, b"key1");
+        assert_eq!(&v, b"val1");
+
+        let (k, v) = cursor.next::<Vec<u8>, Vec<u8>>().unwrap().unwrap();
+        assert_eq!(&k, b"key2");
+        assert_eq!(&v, b"val2");
+    }
+
+    txn.commit().unwrap();
+}
+
+#[test]
+fn test_cursor_cache_reuse_ro_v1() {
+    test_cursor_cache_reuse_ro_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_cursor_cache_reuse_ro_v2() {
+    test_cursor_cache_reuse_ro_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+fn test_cursor_cache_repeated_cycles_ro_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
+    let dir = tempdir().unwrap();
+    let env = Environment::builder().open(dir.path()).unwrap();
+
+    let txn = begin_rw(&env).unwrap();
+    let db = txn.create_db(None, DatabaseFlags::empty()).unwrap();
+    txn.put(db, b"key", b"val", WriteFlags::empty()).unwrap();
+    txn.commit().unwrap();
+
+    let txn = begin_ro(&env).unwrap();
+    let db = txn.open_db(None).unwrap();
+
+    for _ in 0..100 {
+        let mut cursor = txn.cursor(db).unwrap();
+        let (k, v) = cursor.first::<Vec<u8>, Vec<u8>>().unwrap().unwrap();
+        assert_eq!(&k, b"key");
+        assert_eq!(&v, b"val");
+    }
+
+    txn.commit().unwrap();
+}
+
+#[test]
+fn test_cursor_cache_repeated_cycles_ro_v1() {
+    test_cursor_cache_repeated_cycles_ro_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_cursor_cache_repeated_cycles_ro_v2() {
+    test_cursor_cache_repeated_cycles_ro_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
+fn test_cursor_cache_reuse_across_writes_impl<RwTx, RoTx>(
+    begin_rw: impl Fn(&Environment) -> MdbxResult<RwTx>,
+    _begin_ro: impl Fn(&Environment) -> MdbxResult<RoTx>,
+) where
+    RwTx: TestRwTxn,
+    RoTx: TestRoTxn,
+{
+    let dir = tempdir().unwrap();
+    let env = Environment::builder().open(dir.path()).unwrap();
+
+    let txn = begin_rw(&env).unwrap();
+    let db = txn.create_db(None, DatabaseFlags::empty()).unwrap();
+    txn.put(db, b"key1", b"val1", WriteFlags::empty()).unwrap();
+
+    // cursor -> read -> drop (returns to cache)
+    {
+        let mut cursor = txn.cursor(db).unwrap();
+        let (k, v) = cursor.first::<Vec<u8>, Vec<u8>>().unwrap().unwrap();
+        assert_eq!(&k, b"key1");
+        assert_eq!(&v, b"val1");
+    }
+
+    // Write new data (B-tree COW)
+    txn.put(db, b"key2", b"val2", WriteFlags::empty()).unwrap();
+
+    // cursor (from cache) -> read -> should see updated data
+    {
+        let mut cursor = txn.cursor(db).unwrap();
+        let (k, v) = cursor.last::<Vec<u8>, Vec<u8>>().unwrap().unwrap();
+        assert_eq!(&k, b"key2");
+        assert_eq!(&v, b"val2");
+
+        // Verify both entries visible
+        let (k, v) = cursor.first::<Vec<u8>, Vec<u8>>().unwrap().unwrap();
+        assert_eq!(&k, b"key1");
+        assert_eq!(&v, b"val1");
+    }
+
+    txn.commit().unwrap();
+}
+
+#[test]
+fn test_cursor_cache_reuse_across_writes_v1() {
+    test_cursor_cache_reuse_across_writes_impl(V1Factory::begin_rw, V1Factory::begin_ro);
+}
+
+#[test]
+fn test_cursor_cache_reuse_across_writes_v2() {
+    test_cursor_cache_reuse_across_writes_impl(V2Factory::begin_rw, V2Factory::begin_ro);
+}
+
 // Release-build test: verify runtime error instead of panic
 #[cfg(not(debug_assertions))]
 #[test]

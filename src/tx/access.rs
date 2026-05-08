@@ -179,8 +179,8 @@ pub struct PtrSync {
     committed: AtomicBool,
 
     /// Lock that serialises access to the transaction pointer **and**
-    /// guards the cursor/database cache. Held inside [`with_txn_ptr`]; also
-    /// taken implicitly via the [`Cache`] impl on `Mutex<DbCache>`.
+    /// guards the cursor/database cache. Held inside `with_txn_ptr`; also
+    /// taken implicitly via the `Cache` impl on `Mutex<DbCache>`.
     lock: Mutex<DbCache>,
 
     /// The environment that owns the transaction.

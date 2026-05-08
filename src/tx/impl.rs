@@ -233,17 +233,7 @@ where
     /// DBI, and may result in bad behavior when using those instances after
     /// calling this function.
     pub unsafe fn close_db(&self, dbi: ffi::MDBX_dbi) -> MdbxResult<()> {
-        // Drain and close any cached cursors for this DBI before closing it.
-        let stale = self.cache.drain_cursors_for_dbi(dbi);
-        if !stale.is_empty() {
-            self.with_txn_ptr(|_| {
-                for cursor in stale {
-                    // SAFETY: cursor pointers are valid — returned by
-                    // Cursor::drop during the lifetime of this transaction.
-                    unsafe { ffi::mdbx_cursor_close(cursor) };
-                }
-            });
-        }
+        close_drained_cursors(&self.txn, self.cache.drain_cursors_for_dbi(dbi));
         // SAFETY: Caller ensures no other references exist.
         unsafe { ops::close_db_raw(self.meta.env.env_ptr(), dbi) }?;
         self.cache.remove_dbi(dbi);
@@ -257,38 +247,56 @@ where
     /// a new `mdbx_cursor_open` allocation. Cached cursors are renewed
     /// via `mdbx_cursor_renew` to reset their position.
     pub fn cursor(&self, db: Database) -> MdbxResult<Cursor<'_, K>> {
-        if let Some(raw) = self.cache.take_cursor(db.dbi()) {
-            self.with_txn_ptr(|txn_ptr| {
-                // SAFETY: txn_ptr is valid from with_txn_ptr, raw is a
-                // valid cursor pointer returned by a prior Cursor::drop.
-                let rc = unsafe { ffi::mdbx_cursor_renew(txn_ptr, raw) };
-                mdbx_result(rc)?;
-                Ok(Cursor::from_raw(&self.txn, &self.cache, raw, db))
-            })
-        } else {
-            Cursor::new(&self.txn, &self.cache, db)
-        }
+        let Some(raw) = self.cache.take_cursor(db.dbi()) else {
+            return Cursor::new(&self.txn, &self.cache, db);
+        };
+        self.with_txn_ptr(|txn_ptr| {
+            // SAFETY: txn_ptr is valid from with_txn_ptr. `raw` was produced
+            // by a prior Cursor::drop in this transaction.
+            match unsafe { ops::cursor_renew_raw(txn_ptr, raw) } {
+                Ok(()) => Ok(Cursor::from_raw(&self.txn, &self.cache, raw, db)),
+                Err(e) => {
+                    // Renew failed — the cursor is in an indeterminate state.
+                    // Close it defensively with the non-panicking variant and
+                    // return the error. Do NOT re-insert into the cache, as
+                    // a subsequent `cursor()` call would hit the same failure.
+                    // SAFETY: within with_txn_ptr; close2 handles any cursor state.
+                    unsafe { ops::cursor_close2_raw(raw) };
+                    Err(e)
+                }
+            }
+        })
     }
 
     /// Drains the cursor cache and closes all cached cursor pointers.
     ///
     /// Must be called before commit or abort to ensure all cursors are
     /// closed while the transaction is still valid.
-    ///
-    /// NB: keep in sync with the inlined logic in `Tx::Drop`.
     fn drain_cached_cursors(&self) {
-        let cursors = self.cache.drain_cursors();
-        if cursors.is_empty() {
-            return;
-        }
-        self.with_txn_ptr(|_| {
-            for cursor in cursors {
-                // SAFETY: cursor pointers are valid — they were returned
-                // by Cursor::drop during the lifetime of this transaction.
-                unsafe { ffi::mdbx_cursor_close(cursor) };
-            }
-        });
+        close_drained_cursors(&self.txn, self.cache.drain_cursors());
     }
+}
+
+/// Closes a drained batch of cursor pointers via the ops module.
+///
+/// This is a free function (rather than a method on [`Tx`]) so that
+/// [`Tx::drop`], which is defined with a free access-type parameter,
+/// can share the same implementation as the `Tx<K>` methods.
+fn close_drained_cursors<U: TxPtrAccess>(
+    access: &U,
+    cursors: SmallVec<[*mut ffi::MDBX_cursor; 8]>,
+) {
+    if cursors.is_empty() {
+        return;
+    }
+    access.with_txn_ptr(|_| {
+        for cursor in cursors {
+            // SAFETY: cursor pointers are valid — they were returned by
+            // Cursor::drop during the lifetime of this transaction, which
+            // is still alive within the with_txn_ptr block.
+            unsafe { ops::cursor_close_raw(cursor) };
+        }
+    });
 }
 
 // Write-only
@@ -513,17 +521,7 @@ impl<K: TransactionKind + WriteMarker> Tx<K> {
     /// exist. [`Database`] instances with the DBI will be invalidated, and
     /// use after calling this function may result in bad behavior.
     pub unsafe fn drop_db(&self, db: Database) -> MdbxResult<()> {
-        // Drain and close any cached cursors for this DBI before dropping it.
-        let stale = self.cache.drain_cursors_for_dbi(db.dbi());
-        if !stale.is_empty() {
-            self.with_txn_ptr(|_| {
-                for cursor in stale {
-                    // SAFETY: cursor pointers are valid — returned by
-                    // Cursor::drop during the lifetime of this transaction.
-                    unsafe { ffi::mdbx_cursor_close(cursor) };
-                }
-            });
-        }
+        close_drained_cursors(&self.txn, self.cache.drain_cursors_for_dbi(db.dbi()));
         self.with_txn_ptr(|txn| {
             // SAFETY: txn is a valid RW transaction pointer, caller ensures
             // no other references to dbi exist.
@@ -717,27 +715,15 @@ where
 
 // NOTE: This impl is on Tx<K, U> with free U, not Tx<K> (where U = K::Access).
 // Rust requires Drop bounds to match the struct definition exactly, so we
-// cannot call `self.drain_cached_cursors()` here (it lives on `impl<K> Tx<K>`).
-// NB: keep in sync with `drain_cached_cursors`.
-// The drain-and-close logic is inlined instead.
+// route through the `close_drained_cursors` free function, which is generic
+// over the access type.
 impl<K, U> Drop for Tx<K, U>
 where
     K: TransactionKind,
     U: TxPtrAccess,
 {
     fn drop(&mut self) {
-        let cursors = self.cache.drain_cursors();
-        if cursors.is_empty() {
-            return;
-        }
-        self.txn.with_txn_ptr(|_| {
-            for cursor in cursors {
-                // SAFETY: cursor pointers were returned by Cursor::drop
-                // during the lifetime of this transaction, which is still
-                // alive (we are in Tx::drop, before txn ptr is dropped).
-                unsafe { ffi::mdbx_cursor_close(cursor) };
-            }
-        });
+        close_drained_cursors(&self.txn, self.cache.drain_cursors());
     }
 }
 
@@ -794,6 +780,82 @@ mod tests {
 
         assert_eq!(db1_a.dbi(), db1_b.dbi());
         assert_ne!(db1_a.dbi(), db2.dbi());
+    }
+
+    #[test]
+    fn test_cursor_cache_counts() {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+        let txn = TxUnsync::<Rw>::begin(env.clone()).unwrap();
+        let db = txn.create_db(None, DatabaseFlags::empty()).unwrap();
+
+        assert_eq!(txn.cache.cursor_count(), 0);
+
+        {
+            let _c = txn.cursor(db).unwrap();
+            assert_eq!(txn.cache.cursor_count(), 0, "live cursor is not in cache");
+        }
+        assert_eq!(txn.cache.cursor_count(), 1, "dropped cursor returns to cache");
+
+        {
+            let _c = txn.cursor(db).unwrap();
+            assert_eq!(txn.cache.cursor_count(), 0, "second cursor reuses cached pointer");
+        }
+        assert_eq!(txn.cache.cursor_count(), 1, "re-dropped cursor returns to cache");
+
+        txn.commit().unwrap();
+    }
+
+    #[test]
+    fn test_cursor_cache_close_db_drains() {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().set_max_dbs(4).open(dir.path()).unwrap();
+
+        // Create two DBs in a write txn and commit.
+        {
+            let txn = TxUnsync::<Rw>::begin(env.clone()).unwrap();
+            txn.create_db(Some("a"), DatabaseFlags::empty()).unwrap();
+            txn.create_db(Some("b"), DatabaseFlags::empty()).unwrap();
+            txn.commit().unwrap();
+        }
+
+        let txn = TxUnsync::<Ro>::begin(env.clone()).unwrap();
+        let db_a = txn.open_db(Some("a")).unwrap();
+        let db_b = txn.open_db(Some("b")).unwrap();
+
+        // Populate the cache: one cursor per DBI.
+        drop(txn.cursor(db_a).unwrap());
+        drop(txn.cursor(db_b).unwrap());
+        assert_eq!(txn.cache.cursor_count(), 2);
+
+        // close_db on "a" must drain only that DBI's cursor.
+        // SAFETY: no live Cursor/Database instances for db_a remain.
+        unsafe { txn.close_db(db_a.dbi()).unwrap() };
+        assert_eq!(txn.cache.cursor_count(), 1, "close_db drains only its DBI");
+    }
+
+    #[test]
+    fn test_cursor_renew_error_does_not_leak() {
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+        let txn = TxUnsync::<Rw>::begin(env.clone()).unwrap();
+        let db = txn.create_db(None, DatabaseFlags::empty()).unwrap();
+
+        // Inject a null pointer into the cache for db's DBI. The cursor()
+        // cache-hit path will call mdbx_cursor_renew on it, which returns
+        // MDBX_EINVAL for a null cursor; the error path closes via
+        // mdbx_cursor_close2 (also null-safe) and must not re-insert.
+        // SAFETY: the renew error path uses cursor_close2_raw which tolerates null.
+        unsafe { txn.cache.inject_cursor(db.dbi(), ptr::null_mut()) };
+        assert_eq!(txn.cache.cursor_count(), 1);
+
+        let err = txn.cursor(db).expect_err("renew must fail on null cursor");
+        assert!(matches!(err, MdbxError::DecodeError), "expected EINVAL mapping, got {err:?}");
+        assert_eq!(txn.cache.cursor_count(), 0, "failed renew must not leak the pointer");
+
+        // A follow-up call falls through to the open path and succeeds,
+        // proving recovery via retry works.
+        let _c = txn.cursor(db).unwrap();
     }
 
     fn __compile_checks() {

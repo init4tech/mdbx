@@ -52,6 +52,21 @@ pub trait Cache: Clone + Default + std::fmt::Debug {
     /// Drain cached cursors for a specific DBI, returning their raw pointers.
     /// The caller is responsible for closing them via FFI.
     fn drain_cursors_for_dbi(&self, dbi: ffi::MDBX_dbi) -> SmallVec<[*mut ffi::MDBX_cursor; 8]>;
+
+    /// Returns the total number of cached cursors across all DBIs.
+    #[cfg(test)]
+    fn cursor_count(&self) -> usize;
+
+    /// Injects a raw cursor pointer into the cache for the given DBI.
+    ///
+    /// # Safety
+    ///
+    /// - `cursor` must either be a valid MDBX cursor pointer bound to the
+    ///   enclosing transaction, or a pointer whose `mdbx_cursor_close2`
+    ///   behaviour the caller accepts (tests that trigger failure paths
+    ///   knowingly inject unusual values here).
+    #[cfg(test)]
+    unsafe fn inject_cursor(&self, dbi: ffi::MDBX_dbi, cursor: *mut ffi::MDBX_cursor);
 }
 
 /// Cached database entry.
@@ -225,6 +240,16 @@ impl Cache for SharedCache {
     fn drain_cursors_for_dbi(&self, dbi: ffi::MDBX_dbi) -> SmallVec<[*mut ffi::MDBX_cursor; 8]> {
         self.write().drain_cursors_for_dbi(dbi)
     }
+
+    #[cfg(test)]
+    fn cursor_count(&self) -> usize {
+        self.read().cursors.len()
+    }
+
+    #[cfg(test)]
+    unsafe fn inject_cursor(&self, dbi: ffi::MDBX_dbi, cursor: *mut ffi::MDBX_cursor) {
+        self.write().cursors.push((dbi, cursor));
+    }
 }
 
 impl Default for SharedCache {
@@ -263,5 +288,15 @@ impl Cache for RefCell<DbCache> {
 
     fn drain_cursors_for_dbi(&self, dbi: ffi::MDBX_dbi) -> SmallVec<[*mut ffi::MDBX_cursor; 8]> {
         self.borrow_mut().drain_cursors_for_dbi(dbi)
+    }
+
+    #[cfg(test)]
+    fn cursor_count(&self) -> usize {
+        self.borrow().cursors.len()
+    }
+
+    #[cfg(test)]
+    unsafe fn inject_cursor(&self, dbi: ffi::MDBX_dbi, cursor: *mut ffi::MDBX_cursor) {
+        self.borrow_mut().cursors.push((dbi, cursor));
     }
 }

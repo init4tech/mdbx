@@ -101,7 +101,7 @@ where
             .len()
             .saturating_sub(self.page_offset)
             .checked_div(self.value_size)
-            .unwrap_or(0);
+            .unwrap_or_default();
         f.debug_struct("IterDupFixed")
             .field("exhausted", &self.exhausted)
             .field("value_size", &self.value_size)

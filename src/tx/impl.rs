@@ -50,9 +50,9 @@ impl fmt::Debug for TxMeta {
 pub struct Tx<K: TransactionKind, U: TxPtrAccess = <K as SyncKind>::Access> {
     txn: U,
 
-    cache: K::Cache,
-
     meta: TxMeta,
+
+    _kind: core::marker::PhantomData<K>,
 }
 
 impl<K: TransactionKind, U: TxPtrAccess> fmt::Debug for Tx<K, U> {
@@ -66,7 +66,11 @@ where
     K: TransactionKind<Access = Arc<PtrSync>>,
 {
     fn clone(&self) -> Self {
-        Self { txn: Arc::clone(&self.txn), cache: self.cache.clone(), meta: self.meta.clone() }
+        Self {
+            txn: Arc::clone(&self.txn),
+            meta: self.meta.clone(),
+            _kind: core::marker::PhantomData,
+        }
     }
 }
 
@@ -75,8 +79,7 @@ impl<K: TransactionKind> Tx<K> {
     pub(crate) fn from_access_and_env(txn: K::Access, env: Environment) -> Self {
         let span = K::new_span(txn.tx_id().unwrap_or_default());
         let meta = TxMeta { env, span };
-        let cache = K::Cache::default();
-        Self { txn, cache, meta }
+        Self { txn, meta, _kind: core::marker::PhantomData }
     }
 
     /// Creates a new transaction wrapper from raw pointer and environment.
@@ -156,7 +159,7 @@ where
     pub fn open_db(&self, name: Option<&str>) -> MdbxResult<Database> {
         let name_hash = CachedDb::hash_name(name);
 
-        if let Some(db) = self.cache.read_db(name_hash) {
+        if let Some(db) = self.txn.cache().read_db(name_hash) {
             return Ok(db);
         }
 
@@ -174,7 +177,7 @@ where
         flags: DatabaseFlags,
     ) -> MdbxResult<CachedDb> {
         let db = self.open_db_with_flags(name, flags)?;
-        self.cache.write_db(db);
+        self.txn.cache().write_db(db);
         Ok(db)
     }
 
@@ -233,10 +236,10 @@ where
     /// DBI, and may result in bad behavior when using those instances after
     /// calling this function.
     pub unsafe fn close_db(&self, dbi: ffi::MDBX_dbi) -> MdbxResult<()> {
-        close_drained_cursors(&self.txn, self.cache.drain_cursors_for_dbi(dbi));
+        close_drained_cursors(&self.txn, self.txn.cache().drain_cursors_for_dbi(dbi));
         // SAFETY: Caller ensures no other references exist.
         unsafe { ops::close_db_raw(self.meta.env.env_ptr(), dbi) }?;
-        self.cache.remove_dbi(dbi);
+        self.txn.cache().remove_dbi(dbi);
         Ok(())
     }
 
@@ -247,14 +250,14 @@ where
     /// a new `mdbx_cursor_open` allocation. Cached cursors are renewed
     /// via `mdbx_cursor_renew` to reset their position.
     pub fn cursor(&self, db: Database) -> MdbxResult<Cursor<'_, K>> {
-        let Some(raw) = self.cache.take_cursor(db.dbi()) else {
-            return Cursor::new(&self.txn, &self.cache, db);
+        let Some(raw) = self.txn.cache().take_cursor(db.dbi()) else {
+            return Cursor::new(&self.txn, db);
         };
         self.with_txn_ptr(|txn_ptr| {
             // SAFETY: txn_ptr is valid from with_txn_ptr. `raw` was produced
             // by a prior Cursor::drop in this transaction.
             match unsafe { ops::cursor_renew_raw(txn_ptr, raw) } {
-                Ok(()) => Ok(Cursor::from_raw(&self.txn, &self.cache, raw, db)),
+                Ok(()) => Ok(Cursor::from_raw(&self.txn, raw, db)),
                 Err(e) => {
                     // Renew failed — the cursor is in an indeterminate state.
                     // Close it defensively with the non-panicking variant and
@@ -270,10 +273,11 @@ where
 
     /// Drains the cursor cache and closes all cached cursor pointers.
     ///
-    /// Must be called before commit or abort to ensure all cursors are
-    /// closed while the transaction is still valid.
+    /// Must be called before commit to ensure all cursors are closed while
+    /// the transaction is still valid. Abort flows rely on
+    /// `PtrSync::Drop` / `PtrUnsync::Drop` to drain instead.
     fn drain_cached_cursors(&self) {
-        close_drained_cursors(&self.txn, self.cache.drain_cursors());
+        close_drained_cursors(&self.txn, self.txn.cache().drain_cursors());
     }
 }
 
@@ -521,14 +525,14 @@ impl<K: TransactionKind + WriteMarker> Tx<K> {
     /// exist. [`Database`] instances with the DBI will be invalidated, and
     /// use after calling this function may result in bad behavior.
     pub unsafe fn drop_db(&self, db: Database) -> MdbxResult<()> {
-        close_drained_cursors(&self.txn, self.cache.drain_cursors_for_dbi(db.dbi()));
+        close_drained_cursors(&self.txn, self.txn.cache().drain_cursors_for_dbi(db.dbi()));
         self.with_txn_ptr(|txn| {
             // SAFETY: txn is a valid RW transaction pointer, caller ensures
             // no other references to dbi exist.
             unsafe { ops::drop_db_raw(txn, db.dbi()) }
         })?;
 
-        self.cache.remove_dbi(db.dbi());
+        self.txn.cache().remove_dbi(db.dbi());
 
         Ok(())
     }
@@ -713,20 +717,6 @@ where
     }
 }
 
-// NOTE: This impl is on Tx<K, U> with free U, not Tx<K> (where U = K::Access).
-// Rust requires Drop bounds to match the struct definition exactly, so we
-// route through the `close_drained_cursors` free function, which is generic
-// over the access type.
-impl<K, U> Drop for Tx<K, U>
-where
-    K: TransactionKind,
-    U: TxPtrAccess,
-{
-    fn drop(&mut self) {
-        close_drained_cursors(&self.txn, self.cache.drain_cursors());
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -789,19 +779,19 @@ mod tests {
         let txn = TxUnsync::<Rw>::begin(env.clone()).unwrap();
         let db = txn.create_db(None, DatabaseFlags::empty()).unwrap();
 
-        assert_eq!(txn.cache.cursor_count(), 0);
+        assert_eq!(txn.txn.cache().cursor_count(), 0);
 
         {
             let _c = txn.cursor(db).unwrap();
-            assert_eq!(txn.cache.cursor_count(), 0, "live cursor is not in cache");
+            assert_eq!(txn.txn.cache().cursor_count(), 0, "live cursor is not in cache");
         }
-        assert_eq!(txn.cache.cursor_count(), 1, "dropped cursor returns to cache");
+        assert_eq!(txn.txn.cache().cursor_count(), 1, "dropped cursor returns to cache");
 
         {
             let _c = txn.cursor(db).unwrap();
-            assert_eq!(txn.cache.cursor_count(), 0, "second cursor reuses cached pointer");
+            assert_eq!(txn.txn.cache().cursor_count(), 0, "second cursor reuses cached pointer");
         }
-        assert_eq!(txn.cache.cursor_count(), 1, "re-dropped cursor returns to cache");
+        assert_eq!(txn.txn.cache().cursor_count(), 1, "re-dropped cursor returns to cache");
 
         txn.commit().unwrap();
     }
@@ -826,12 +816,65 @@ mod tests {
         // Populate the cache: one cursor per DBI.
         drop(txn.cursor(db_a).unwrap());
         drop(txn.cursor(db_b).unwrap());
-        assert_eq!(txn.cache.cursor_count(), 2);
+        assert_eq!(txn.txn.cache().cursor_count(), 2);
 
         // close_db on "a" must drain only that DBI's cursor.
         // SAFETY: no live Cursor/Database instances for db_a remain.
         unsafe { txn.close_db(db_a.dbi()).unwrap() };
-        assert_eq!(txn.cache.cursor_count(), 1, "close_db drains only its DBI");
+        assert_eq!(txn.txn.cache().cursor_count(), 1, "close_db drains only its DBI");
+    }
+
+    #[test]
+    fn test_clone_drop_does_not_drain_shared_cache() {
+        // Regression for the bug evalir flagged on PR #11: dropping a
+        // `TxSync` clone must not drain the cursor cache shared with
+        // surviving clones.
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+        let txn_a = RwTxSync::begin(env.clone()).unwrap();
+        let db = txn_a.create_db(None, DatabaseFlags::empty()).unwrap();
+        drop(txn_a.cursor(db).unwrap());
+        assert_eq!(txn_a.txn.cache().cursor_count(), 1);
+
+        let txn_b = txn_a.clone();
+        drop(txn_b);
+        assert_eq!(
+            txn_a.txn.cache().cursor_count(),
+            1,
+            "clone-drop must not drain the shared cursor cache"
+        );
+
+        // Surviving clone can still reuse the cached cursor.
+        drop(txn_a.cursor(db).unwrap());
+        assert_eq!(txn_a.txn.cache().cursor_count(), 1);
+    }
+
+    #[test]
+    fn test_concurrent_clone_drop_no_uaf() {
+        // Two threads each hold a clone and drop concurrently. Repeat to
+        // shake out any race in cache cleanup. With cache co-located in
+        // `PtrSync`, the cleanup runs exactly once when the last `Arc`
+        // drops — no race possible.
+        let dir = tempdir().unwrap();
+        let env = Environment::builder().open(dir.path()).unwrap();
+
+        for _ in 0..200 {
+            let txn = RwTxSync::begin(env.clone()).unwrap();
+            let db = txn.create_db(None, DatabaseFlags::empty()).unwrap();
+            // Populate cache with a few cursors.
+            drop(txn.cursor(db).unwrap());
+            drop(txn.cursor(db).unwrap());
+            drop(txn.cursor(db).unwrap());
+
+            let a = txn.clone();
+            let b = txn.clone();
+            drop(txn); // original
+
+            let h1 = std::thread::spawn(move || drop(a));
+            let h2 = std::thread::spawn(move || drop(b));
+            h1.join().unwrap();
+            h2.join().unwrap();
+        }
     }
 
     #[test]
@@ -846,12 +889,12 @@ mod tests {
         // MDBX_EINVAL for a null cursor; the error path closes via
         // mdbx_cursor_close2 (also null-safe) and must not re-insert.
         // SAFETY: the renew error path uses cursor_close2_raw which tolerates null.
-        unsafe { txn.cache.inject_cursor(db.dbi(), ptr::null_mut()) };
-        assert_eq!(txn.cache.cursor_count(), 1);
+        unsafe { txn.txn.cache().inject_cursor(db.dbi(), ptr::null_mut()) };
+        assert_eq!(txn.txn.cache().cursor_count(), 1);
 
         let err = txn.cursor(db).expect_err("renew must fail on null cursor");
         assert!(matches!(err, MdbxError::DecodeError), "expected EINVAL mapping, got {err:?}");
-        assert_eq!(txn.cache.cursor_count(), 0, "failed renew must not leak the pointer");
+        assert_eq!(txn.txn.cache().cursor_count(), 0, "failed renew must not leak the pointer");
 
         // A follow-up call falls through to the open path and succeeds,
         // proving recovery via retry works.

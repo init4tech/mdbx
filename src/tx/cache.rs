@@ -1,35 +1,37 @@
-//! Caches for [`Database`] info, used by the [`TxSync`] and [`TxUnsync`] types.
+//! Caches for [`Database`] info and cursor pointers, used by the [`TxSync`]
+//! and [`TxUnsync`] types.
 //!
-//! This module defines cache types for storing database handles within
-//! transactions. Caches improve performance by avoiding repeated lookups of
-//! database information.
+//! This module defines cache types for storing database handles and cached
+//! cursor pointers within transactions. The cache is co-located with the
+//! transaction pointer (in [`PtrSync`]/[`PtrUnsync`]) so that its lifetime
+//! is bound to the transaction's; this guarantees cached cursors are closed
+//! exactly once, before the transaction is aborted or committed, even when
+//! a `TxSync` is cloned across threads.
 //!
-//! The primary caches are:
-//! - [`DbCache`]: A simple inline cache using `SmallVec` for efficient storage
-//!   of a small number of database handles. Used in unsynchronized
-//!   transactions via [`RefCell`].
-//! - [`SharedCache`]: A thread-safe cache using `Arc<RwLock<...>>` for
-//!   synchronized transactions.
+//! The container is [`DbCache`], used either:
+//! - inline behind a [`RefCell`] for unsynchronized transactions, or
+//! - inline behind a [`parking_lot::Mutex`] for synchronized transactions
+//!   (the same mutex that serialises raw txn-pointer access).
 //!
 //! [`TxSync`]: crate::tx::aliases::TxSync
 //! [`TxUnsync`]: crate::tx::aliases::TxUnsync
+//! [`PtrSync`]: crate::tx::PtrSync
+//! [`PtrUnsync`]: crate::tx::PtrUnsync
 
 use crate::Database;
-use parking_lot::RwLock;
+use parking_lot::Mutex;
 use smallvec::SmallVec;
 use std::{
     cell::RefCell,
     hash::{Hash, Hasher},
-    sync::Arc,
 };
 
 /// Cache trait for transaction-local database handles and cursors.
 ///
-/// This is used by the [`SyncKind`] trait to define the cache type for each
-/// transaction kind.
-///
-/// [`SyncKind`]: crate::tx::kind::SyncKind
-pub trait Cache: Clone + Default + std::fmt::Debug {
+/// Implemented on the concrete container types that wrap a [`DbCache`]
+/// (e.g. [`Mutex<DbCache>`] for synchronized transactions and
+/// [`RefCell<DbCache>`] for unsynchronized ones).
+pub trait Cache: std::fmt::Debug {
     /// Read a database entry from the cache.
     fn read_db(&self, name_hash: u64) -> Option<Database>;
 
@@ -126,12 +128,6 @@ impl Default for DbCache {
     }
 }
 
-impl Clone for DbCache {
-    fn clone(&self) -> Self {
-        Self { dbs: self.dbs.clone(), cursors: SmallVec::new() }
-    }
-}
-
 impl DbCache {
     /// Read a database entry from the cache.
     fn read_db(&self, name_hash: u64) -> Option<Database> {
@@ -162,7 +158,7 @@ impl DbCache {
     }
 
     /// Drain all cached cursors, returning their raw pointers.
-    fn drain_cursors(&mut self) -> SmallVec<[*mut ffi::MDBX_cursor; 8]> {
+    pub(crate) fn drain_cursors(&mut self) -> SmallVec<[*mut ffi::MDBX_cursor; 8]> {
         self.cursors.drain(..).map(|(_, c)| c).collect()
     }
 
@@ -184,77 +180,43 @@ impl DbCache {
     }
 }
 
-/// Simple cache container for database handles.
-///
-/// Uses inline storage for the common case (most apps use < 16 databases).
-#[derive(Debug, Clone)]
-pub struct SharedCache {
-    cache: Arc<RwLock<DbCache>>,
-}
-
-impl SharedCache {
-    /// Creates a new empty cache.
-    fn new() -> Self {
-        Self { cache: Arc::new(RwLock::new(DbCache::default())) }
-    }
-
-    /// Returns a read guard to the cache.
-    fn read(&self) -> parking_lot::RwLockReadGuard<'_, DbCache> {
-        self.cache.read()
-    }
-
-    /// Returns a write guard to the cache.
-    fn write(&self) -> parking_lot::RwLockWriteGuard<'_, DbCache> {
-        self.cache.write()
-    }
-}
-
-impl Cache for SharedCache {
-    /// Read a database entry from the cache.
+impl Cache for Mutex<DbCache> {
     fn read_db(&self, name_hash: u64) -> Option<Database> {
-        self.read().read_db(name_hash)
+        self.lock().read_db(name_hash)
     }
 
-    /// Write a database entry to the cache.
     fn write_db(&self, db: CachedDb) {
-        self.write().write_db(db);
+        self.lock().write_db(db);
     }
 
-    /// Remove a database entry from the cache by dbi.
     fn remove_dbi(&self, dbi: ffi::MDBX_dbi) {
-        self.write().remove_dbi(dbi);
+        self.lock().remove_dbi(dbi);
     }
 
     fn take_cursor(&self, dbi: ffi::MDBX_dbi) -> Option<*mut ffi::MDBX_cursor> {
-        self.write().take_cursor(dbi)
+        self.lock().take_cursor(dbi)
     }
 
     fn return_cursor(&self, dbi: ffi::MDBX_dbi, cursor: *mut ffi::MDBX_cursor) {
-        self.write().return_cursor(dbi, cursor);
+        self.lock().return_cursor(dbi, cursor);
     }
 
     fn drain_cursors(&self) -> SmallVec<[*mut ffi::MDBX_cursor; 8]> {
-        self.write().drain_cursors()
+        self.lock().drain_cursors()
     }
 
     fn drain_cursors_for_dbi(&self, dbi: ffi::MDBX_dbi) -> SmallVec<[*mut ffi::MDBX_cursor; 8]> {
-        self.write().drain_cursors_for_dbi(dbi)
+        self.lock().drain_cursors_for_dbi(dbi)
     }
 
     #[cfg(test)]
     fn cursor_count(&self) -> usize {
-        self.read().cursors.len()
+        self.lock().cursors.len()
     }
 
     #[cfg(test)]
     unsafe fn inject_cursor(&self, dbi: ffi::MDBX_dbi, cursor: *mut ffi::MDBX_cursor) {
-        self.write().cursors.push((dbi, cursor));
-    }
-}
-
-impl Default for SharedCache {
-    fn default() -> Self {
-        Self::new()
+        self.lock().cursors.push((dbi, cursor));
     }
 }
 

@@ -34,7 +34,6 @@ where
     K: TransactionKind,
 {
     access: &'tx K::Access,
-    cache: &'tx K::Cache,
     cursor: *mut ffi::MDBX_cursor,
     db: Database,
     _kind: PhantomData<K>,
@@ -45,16 +44,12 @@ where
     K: TransactionKind,
 {
     /// Creates a new cursor from a reference to a transaction access type.
-    pub(crate) fn new(
-        access: &'tx K::Access,
-        cache: &'tx K::Cache,
-        db: Database,
-    ) -> MdbxResult<Self> {
+    pub(crate) fn new(access: &'tx K::Access, db: Database) -> MdbxResult<Self> {
         let mut cursor: *mut ffi::MDBX_cursor = ptr::null_mut();
         access.with_txn_ptr(|txn_ptr| unsafe {
             mdbx_result(ffi::mdbx_cursor_open(txn_ptr, db.dbi(), &mut cursor))
         })?;
-        Ok(Self { access, cache, cursor, db, _kind: PhantomData })
+        Ok(Self { access, cursor, db, _kind: PhantomData })
     }
 
     /// Wraps an existing raw cursor pointer with cache support.
@@ -62,11 +57,10 @@ where
     /// The cursor must already be bound to the correct transaction and DBI.
     pub(crate) const fn from_raw(
         access: &'tx K::Access,
-        cache: &'tx K::Cache,
         cursor: *mut ffi::MDBX_cursor,
         db: Database,
     ) -> Self {
-        Self { access, cache, cursor, db, _kind: PhantomData }
+        Self { access, cursor, db, _kind: PhantomData }
     }
 
     /// Helper function for `Clone`. This should only be invoked within
@@ -83,13 +77,7 @@ where
                 return Err(e);
             }
 
-            Ok(Self {
-                access: other.access,
-                cache: other.cache,
-                cursor,
-                db: other.db,
-                _kind: PhantomData,
-            })
+            Ok(Self { access: other.access, cursor, db: other.db, _kind: PhantomData })
         }
     }
 
@@ -1099,9 +1087,9 @@ where
 {
     fn drop(&mut self) {
         // Return the cursor pointer to the transaction cache for reuse.
-        // The transaction's commit/drop path will call mdbx_cursor_close on
-        // all cached pointers once the transaction is still valid.
-        self.cache.return_cursor(self.db.dbi(), self.cursor);
+        // The cache lives inside the access type, so the txn's Drop closes
+        // any leftover pointers before aborting.
+        self.access.cache().return_cursor(self.db.dbi(), self.cursor);
     }
 }
 

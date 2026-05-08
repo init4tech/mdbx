@@ -1,13 +1,9 @@
-use std::{cell::RefCell, fmt::Debug, ptr, sync::Arc};
+use std::{fmt::Debug, ptr, sync::Arc};
 
 use crate::{
     Environment, MdbxResult,
     error::mdbx_result,
-    tx::{
-        PtrSync, TxPtrAccess,
-        access::PtrUnsync,
-        cache::{Cache, DbCache, SharedCache},
-    },
+    tx::{PtrSync, TxPtrAccess, access::PtrUnsync},
 };
 use ffi::{MDBX_TXN_RDONLY, MDBX_TXN_READWRITE, MDBX_txn_flags_t};
 
@@ -86,31 +82,24 @@ pub trait SyncKind {
 
     /// The inner storage type for the transaction pointer.
     type Access: TxPtrAccess;
-
-    /// Cache type used for this transaction kind.
-    type Cache: Cache + Send;
 }
 
 impl SyncKind for RoSync {
     const SYNC: bool = true;
     type Access = Arc<PtrSync>;
-    type Cache = SharedCache;
 }
 
 impl SyncKind for RwSync {
     const SYNC: bool = true;
     type Access = Arc<PtrSync>;
-    type Cache = SharedCache;
 }
 
 impl SyncKind for Ro {
     type Access = PtrUnsync;
-    type Cache = RefCell<DbCache>;
 }
 
 impl SyncKind for Rw {
     type Access = PtrUnsync;
-    type Cache = RefCell<DbCache>;
 }
 
 /// Marker trait for writable transaction kinds.

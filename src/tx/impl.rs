@@ -283,9 +283,9 @@ where
 
 /// Closes a drained batch of cursor pointers via the ops module.
 ///
-/// This is a free function (rather than a method on [`Tx`]) so that
-/// [`Tx::drop`], which is defined with a free access-type parameter,
-/// can share the same implementation as the `Tx<K>` methods.
+/// This is a free function (rather than a method on [`Tx`]) so that the
+/// `close_db` / `drop_db` paths and the access types' own `Drop` impls can
+/// share a single closing routine, generic over the access type.
 fn close_drained_cursors<U: TxPtrAccess>(
     access: &U,
     cursors: SmallVec<[*mut ffi::MDBX_cursor; 8]>,

@@ -1085,10 +1085,25 @@ impl<'tx, K> Drop for Cursor<'tx, K>
 where
     K: TransactionKind,
 {
+    /// Returns the cursor pointer to the transaction cache for reuse. The
+    /// cache lives inside the access type, so the txn's `Drop` closes any
+    /// leftover pointers before aborting.
+    ///
+    /// # Deadlock
+    ///
+    /// For `Sync` transaction kinds (`RoTxSync`, `RwTxSync`) the cache is
+    /// guarded by the same `Mutex` that `with_txn_ptr` holds. Dropping a
+    /// `Cursor` from inside a `with_txn_ptr` closure on the same transaction
+    /// therefore deadlocks: the closure already owns the lock and this
+    /// `return_cursor` call tries to re-acquire it.
+    ///
+    /// No current code path triggers this — `with_txn_ptr` only exposes the
+    /// raw txn pointer, and the cursor borrows the access through `&self`
+    /// rather than the closure argument — but it is reachable in user code
+    /// because `RoTxSync::txn` is an `Arc<PtrSync>` with interior
+    /// mutability, so a `Cursor` can be carried into the closure and
+    /// dropped there. Avoid dropping cursors inside `with_txn_ptr`.
     fn drop(&mut self) {
-        // Return the cursor pointer to the transaction cache for reuse.
-        // The cache lives inside the access type, so the txn's Drop closes
-        // any leftover pointers before aborting.
         self.access.cache().return_cursor(self.db.dbi(), self.cursor);
     }
 }

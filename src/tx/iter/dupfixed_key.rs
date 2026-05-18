@@ -48,11 +48,12 @@ where
     K: TransactionKind,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let remaining_in_page = if self.value_size > 0 {
-            self.current_page.len().saturating_sub(self.page_offset) / self.value_size
-        } else {
-            0
-        };
+        let remaining_in_page = self
+            .current_page
+            .len()
+            .saturating_sub(self.page_offset)
+            .checked_div(self.value_size)
+            .unwrap_or_default();
         f.debug_struct("IterDupFixedOfKey")
             .field("exhausted", &self.exhausted)
             .field("value_size", &self.value_size)

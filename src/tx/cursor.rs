@@ -6,6 +6,7 @@ use crate::{
     tx::{
         TxPtrAccess,
         aliases::IterKeyVals,
+        cache::Cache,
         iter::{Iter, IterDup, IterDupFixed, IterDupFixedOfKey, IterDupOfKey},
         kind::WriteMarker,
     },
@@ -51,6 +52,17 @@ where
         Ok(Self { access, cursor, db, _kind: PhantomData })
     }
 
+    /// Wraps an existing raw cursor pointer with cache support.
+    ///
+    /// The cursor must already be bound to the correct transaction and DBI.
+    pub(crate) const fn from_raw(
+        access: &'tx K::Access,
+        cursor: *mut ffi::MDBX_cursor,
+        db: Database,
+    ) -> Self {
+        Self { access, cursor, db, _kind: PhantomData }
+    }
+
     /// Helper function for `Clone`. This should only be invoked within
     /// a `with_txn_ptr` call to ensure safety.
     fn new_at_position(other: &Self) -> MdbxResult<Self> {
@@ -58,12 +70,14 @@ where
             let cursor = ffi::mdbx_cursor_create(ptr::null_mut());
 
             let res = ffi::mdbx_cursor_copy(other.cursor(), cursor);
+            if let Err(e) = mdbx_result(res) {
+                // Close directly — do NOT construct Self, as Drop would
+                // push this unbound cursor into the cache.
+                ffi::mdbx_cursor_close(cursor);
+                return Err(e);
+            }
 
-            let s = Self { access: other.access, cursor, db: other.db, _kind: PhantomData };
-
-            mdbx_result(res)?;
-
-            Ok(s)
+            Ok(Self { access: other.access, cursor, db: other.db, _kind: PhantomData })
         }
     }
 
@@ -1071,12 +1085,26 @@ impl<'tx, K> Drop for Cursor<'tx, K>
 where
     K: TransactionKind,
 {
+    /// Returns the cursor pointer to the transaction cache for reuse. The
+    /// cache lives inside the access type, so the txn's `Drop` closes any
+    /// leftover pointers before aborting.
+    ///
+    /// # Deadlock
+    ///
+    /// For `Sync` transaction kinds (`RoTxSync`, `RwTxSync`) the cache is
+    /// guarded by the same `Mutex` that `with_txn_ptr` holds. Dropping a
+    /// `Cursor` from inside a `with_txn_ptr` closure on the same transaction
+    /// therefore deadlocks: the closure already owns the lock and this
+    /// `return_cursor` call tries to re-acquire it.
+    ///
+    /// No current code path triggers this — `with_txn_ptr` only exposes the
+    /// raw txn pointer, and the cursor borrows the access through `&self`
+    /// rather than the closure argument — but it is reachable in user code
+    /// because `RoTxSync::txn` is an `Arc<PtrSync>` with interior
+    /// mutability, so a `Cursor` can be carried into the closure and
+    /// dropped there. Avoid dropping cursors inside `with_txn_ptr`.
     fn drop(&mut self) {
-        // MDBX cursors MUST be closed. Failure to do so is a memory leak.
-        //
-        // To be able to close a cursor of a timed out transaction, we need to
-        // renew it first. Hence the usage of `with_txn_ptr_for_cleanup` here.
-        self.access.with_txn_ptr(|_| unsafe { ffi::mdbx_cursor_close(self.cursor) });
+        self.access.cache().return_cursor(self.db.dbi(), self.cursor);
     }
 }
 

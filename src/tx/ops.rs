@@ -271,6 +271,63 @@ pub(crate) unsafe fn close_db_raw(env: *mut ffi::MDBX_env, dbi: ffi::MDBX_dbi) -
     Ok(())
 }
 
+/// Renews a cursor, binding it to the given transaction and resetting its
+/// position.
+///
+/// # Safety
+///
+/// - `txn` must be a valid, non-null transaction pointer.
+/// - `cursor` may be null or a valid cursor pointer. A null pointer returns
+///   an error ([`MDBX_EINVAL`]) rather than undefined behaviour.
+///
+/// [`MDBX_EINVAL`]: ffi::MDBX_EINVAL
+#[inline(always)]
+pub(crate) unsafe fn cursor_renew_raw(
+    txn: *mut ffi::MDBX_txn,
+    cursor: *mut ffi::MDBX_cursor,
+) -> MdbxResult<()> {
+    // SAFETY: Caller guarantees txn is valid; MDBX null-checks the cursor.
+    mdbx_result(unsafe { ffi::mdbx_cursor_renew(txn, cursor) })?;
+    Ok(())
+}
+
+/// Closes a cursor, freeing its MDBX allocation.
+///
+/// # Safety
+///
+/// - `cursor` must be a valid, non-null cursor pointer. Passing null or an
+///   invalid cursor causes an MDBX-internal abort.
+/// - Must be called within a [`TxPtrAccess::with_txn_ptr`] block so the
+///   cursor's transaction is still live.
+///
+/// [`TxPtrAccess::with_txn_ptr`]: crate::tx::access::TxPtrAccess::with_txn_ptr
+#[inline(always)]
+pub(crate) unsafe fn cursor_close_raw(cursor: *mut ffi::MDBX_cursor) {
+    // SAFETY: Caller guarantees cursor is valid and non-null.
+    unsafe { ffi::mdbx_cursor_close(cursor) };
+}
+
+/// Closes a cursor without panicking on invalid input.
+///
+/// Unlike [`cursor_close_raw`], this wraps `mdbx_cursor_close2` which
+/// returns an error code instead of aborting the process when given a
+/// null or otherwise invalid cursor. The return value is discarded since
+/// this is only used on error paths where the outcome of the close is
+/// irrelevant.
+///
+/// # Safety
+///
+/// - `cursor` may be null or a potentially-invalid cursor pointer.
+/// - Must be called within a [`TxPtrAccess::with_txn_ptr`] block so the
+///   cursor's transaction is still live.
+///
+/// [`TxPtrAccess::with_txn_ptr`]: crate::tx::access::TxPtrAccess::with_txn_ptr
+#[inline(always)]
+pub(crate) unsafe fn cursor_close2_raw(cursor: *mut ffi::MDBX_cursor) {
+    // SAFETY: MDBX null-checks the cursor and returns an error on invalid input.
+    let _ = unsafe { ffi::mdbx_cursor_close2(cursor) };
+}
+
 /// Checks if a memory pointer refers to dirty (modified) data.
 ///
 /// Returns `true` if the data is dirty and must be copied before borrowing.

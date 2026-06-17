@@ -176,8 +176,12 @@ pub enum MdbxError {
     /// Permission defined
     #[error("permission denied to setup database")]
     Permission,
-    /// Unknown error code.
-    #[error("unknown error code: {0}")]
+    /// An error code MDBX did not map to a specific variant.
+    ///
+    /// MDBX's own codes are negative; a positive code is a system `errno` (e.g. `ENOSPC` or
+    /// `EDQUOT`) that MDBX passed through unchanged, so it is rendered with its OS description
+    /// rather than a bare number.
+    #[error("{}", fmt_other_code(*.0))]
     Other(i32),
     /// Operation requires DUP_SORT flag on database.
     #[error("operation requires DUP_SORT flag on database")]
@@ -191,6 +195,15 @@ pub enum MdbxError {
     /// read transactions within the retry limit.
     #[error("failed to acquire consistent MVCC snapshot across multiple read transactions")]
     SnapshotDivergence,
+}
+
+// Positive codes are system errnos rendered via the OS; negatives are unrecognised MDBX codes.
+fn fmt_other_code(code: i32) -> String {
+    if code > 0 {
+        std::io::Error::from_raw_os_error(code).to_string()
+    } else {
+        format!("unknown MDBX error code: {code}")
+    }
 }
 
 impl MdbxError {
